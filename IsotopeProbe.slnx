@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="IsotopeProbe.Tests/IsotopeProbe.Tests.csproj" />
+  <Project Path="IsotopeProbe/IsotopeProbe.csproj" />
+</Solution>
