@@ -1,6 +1,7 @@
 namespace IsotopeProbe.Domain;
 
 public sealed record ScanExecution(
+    int Id,
     string Target,
     DateTimeOffset StartedAt,
     DateTimeOffset CompletedAt,

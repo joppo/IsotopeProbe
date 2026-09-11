@@ -2,6 +2,8 @@ namespace IsotopeProbe.Domain;
 
 public sealed record Finding
 {
+    public required int Id { get; init; }
+    public required int ScanExecutionId { get; init; }
     public required string TemplateId { get; init; }
 
     public required string Name { get; init; }
