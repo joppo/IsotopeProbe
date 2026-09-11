@@ -1,11 +1,12 @@
 namespace IsotopeProbe.Domain;
 
-public sealed record ScanExecutionInfo(
+public sealed record ScanExecution(
     string Target,
     DateTimeOffset StartedAt,
     DateTimeOffset CompletedAt,
     int ExitCode,
-    string StandardError)
+    string StandardError,
+    IReadOnlyList<Finding> Findings)
 {
     public bool Succeeded => ExitCode == 0;
 

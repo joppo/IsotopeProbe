@@ -16,5 +16,13 @@ services:
     volumes:
       - isotope-postgres-data:/var/lib/postgresql
 
+  nuclei-test-target:
+    build:
+      context: ./test-target
+    container_name: isotope-nuclei-target
+
+    ports:
+      - "8085:80"
+
 volumes:
   isotope-postgres-data:

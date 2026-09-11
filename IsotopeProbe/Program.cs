@@ -1,4 +1,4 @@
-﻿using IsotopeProbe.Nuclei;
+using IsotopeProbe.Nuclei;
 
 if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
 {
@@ -9,35 +9,28 @@ if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
 try
 {
     var runner = new NucleiRunner(new NucleiFindingParser());
-    var result = await runner.RunAsync(args[0]);
+    var execution = await runner.RunAsync(args[0]);
 
-    foreach (var finding in result.Findings)
+    foreach (var finding in execution.Findings)
     {
         Console.WriteLine($"[{finding.Severity}] {finding.Name} ({finding.TemplateId}) at {finding.MatchedAt}");
     }
 
-    switch (result.Outcome)
+    if (!execution.Succeeded)
     {
-        case IsotopeProbe.Domain.ScanOutcome.SucceededWithNoFindings:
-            Console.WriteLine("Scan succeeded with zero findings.");
-            return 0;
+        Console.Error.WriteLine($"Nuclei failed with exit code {execution.ExitCode}.");
+        if (!string.IsNullOrWhiteSpace(execution.StandardError))
+        {
+            Console.Error.WriteLine(execution.StandardError.Trim());
+        }
 
-        case IsotopeProbe.Domain.ScanOutcome.SucceededWithFindings:
-            Console.WriteLine($"Scan succeeded with {result.Findings.Count} finding(s).");
-            return 0;
-
-        case IsotopeProbe.Domain.ScanOutcome.Failed:
-            Console.Error.WriteLine($"Nuclei failed with exit code {result.Execution.ExitCode}.");
-            if (!string.IsNullOrWhiteSpace(result.Execution.StandardError))
-            {
-                Console.Error.WriteLine(result.Execution.StandardError.Trim());
-            }
-
-            return 1;
-
-        default:
-            throw new InvalidOperationException($"Unknown scan outcome: {result.Outcome}.");
+        return 1;
     }
+
+    Console.WriteLine(execution.Findings.Count == 0
+        ? "Scan succeeded with zero findings."
+        : $"Scan succeeded with {execution.Findings.Count} finding(s).");
+    return 0;
 }
 catch (Exception exception)
 {
