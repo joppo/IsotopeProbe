@@ -6,25 +6,11 @@ namespace IsotopeProbe.Nuclei;
 public sealed class NucleiRunner(NucleiFindingParser parser)
 {
     public async Task<ScanExecution> RunAsync(
-        string target, string templatePath,
+        string target, string? templatePath = null,
         CancellationToken cancellationToken = default)
     {
         var findings = new List<Finding>();
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "nuclei",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        startInfo.ArgumentList.Add("-u");
-        startInfo.ArgumentList.Add(target);
-        startInfo.ArgumentList.Add("-templatepath");
-        startInfo.ArgumentList.Add(templatePath);   
-        startInfo.ArgumentList.Add("-jsonl");
-        startInfo.ArgumentList.Add("-silent");
+        var startInfo = CreateStartInfo(target, templatePath);
 
         using var process = new Process { StartInfo = startInfo };
         var startedAt = DateTimeOffset.UtcNow;
@@ -63,5 +49,37 @@ public sealed class NucleiRunner(NucleiFindingParser parser)
             StandardError = standardError,
             Findings = findings
         };
+    }
+
+    internal static ProcessStartInfo CreateStartInfo(string target, string? templatePath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "nuclei",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        startInfo.ArgumentList.Add("-u");
+        startInfo.ArgumentList.Add(target);
+        if (templatePath is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(templatePath);
+            if (templatePath == "~" || templatePath.StartsWith("~/", StringComparison.Ordinal))
+            {
+                templatePath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    templatePath.Length == 1 ? "" : templatePath[2..]);
+            }
+
+            startInfo.ArgumentList.Add("-t");
+            startInfo.ArgumentList.Add(templatePath);
+        }
+        startInfo.ArgumentList.Add("-jsonl");
+        startInfo.ArgumentList.Add("-silent");
+
+        return startInfo;
     }
 }

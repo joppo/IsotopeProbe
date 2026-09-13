@@ -59,9 +59,11 @@ the scan. Nuclei and its templates must already be installed and available on PA
 
 ```bash
 docker compose -f docker/compose.yaml up -d --build nuclei-test-target
-dotnet run --project IsotopeProbe -- http://localhost:8085
+dotnet run --project IsotopeProbe -- http://localhost:8085 -templatepath "~/Templates/sanity/"
 ```
-
+```bash PSQL
+docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
 The application prints the saved execution ID. Findings depend on your installed
 Nuclei templates; a successful scan with zero findings is valid.
 
@@ -72,6 +74,10 @@ docker exec -i isotope-postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USE
 SELECT e.*, e."ExitCode" = 0 AS succeeded,
        (SELECT count(*) FROM findings f WHERE f."ScanExecutionId" = e."Id") AS finding_count
 FROM scan_executions e ORDER BY e."Id" DESC LIMIT 1;
+
+SELECT Id, ScanExecutionId, TemplateId, Name, Severity, MatchedAt, TemplatePath, Authors, Tags, Type, Host, Port, Scheme, Url, IpAddress, Timestamp, MatcherStatus, Request FROM Findings;
+
+SELECT Id, Target, StartedAt, CompletedAt, ExitCode, StandardError FROM scan_executions;
 
 SELECT "Id", "ScanExecutionId", "TemplateId", "Name", "Severity", "Authors", "Tags", "RawJson"
 FROM findings

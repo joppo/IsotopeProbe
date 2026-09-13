@@ -1,9 +1,16 @@
+using IsotopeProbe;
 using IsotopeProbe.Nuclei;
 using IsotopeProbe.Persistence;
 
-if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
+ScanOptions options;
+try
 {
-    Console.Error.WriteLine("Usage: IsotopeProbe <target>");
+    options = ScanOptions.Parse(args);
+}
+catch (ArgumentException exception)
+{
+    Console.Error.WriteLine(exception.Message);
+    Console.Error.WriteLine("Usage: IsotopeProbe <target> [-templatepath <path>]");
     return 1;
 }
 
@@ -11,7 +18,7 @@ try
 {
     await using var db = new IsotopeProbeDbContextFactory().CreateDbContext([]);
     var runner = new NucleiRunner(new NucleiFindingParser());
-    var execution = await runner.RunAsync(args[0]);
+    var execution = await runner.RunAsync(options.Target, options.TemplatePath);
 
     db.ScanExecutions.Add(execution);
     await db.SaveChangesAsync();

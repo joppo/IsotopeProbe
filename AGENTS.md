@@ -41,6 +41,17 @@ These may be introduced later.
 Before making significant architectural changes, explain the proposed change.
 Add tests for parsing and non-trivial logic.
 
+## Console arguments
+
+- Usage: `IsotopeProbe <target> [-templatepath <path>]`.
+- Accept `-templatepath` before or after the target and pass its value to Nuclei
+  using `-t`, while retaining `-u <target> -jsonl -silent`.
+- Keep template selection optional; omit `-t` when no path is supplied.
+- Expand a leading `~/` to the user's home directory, including quoted paths.
+  Preserve paths containing spaces as a single process argument.
+- Local testing example:
+  `dotnet run --project IsotopeProbe -- http://localhost:8085 -templatepath "~/Templates/sanity/"`.
+
 ## Specs
 
 The location is ~/z/p/nuclei/isotopeprobe
