@@ -1,3 +1,4 @@
+using IsotopeProbe.Domain;
 using IsotopeProbe.Queries;
 
 namespace IsotopeProbe.Cli;
@@ -24,8 +25,12 @@ internal static class QueryConsole
                 var execution = details.Execution;
                 Console.WriteLine($"Scan {execution.Id}: {Clean(execution.Target)}");
                 Console.WriteLine($"Started (UTC): {execution.StartedAt.UtcDateTime:O}");
-                Console.WriteLine($"Completed (UTC): {execution.CompletedAt.UtcDateTime:O}");
-                Console.WriteLine($"Status: {Status(execution)} (exit code {execution.ExitCode})");
+                Console.WriteLine($"Completed (UTC): {(execution.CompletedAt is { } completed ? completed.UtcDateTime.ToString("O") : "not completed")}");
+                Console.WriteLine($"Status: {Status(execution)} (exit code {execution.ExitCode?.ToString() ?? "unavailable"})");
+                if (execution.Status == ScanStatus.Running)
+                    Console.WriteLine("Running is the last persisted state; it does not prove the process is still alive.");
+                if (details.FailureReason is not null)
+                    Console.WriteLine($"Failure details: {Clean(details.FailureReason)}");
                 Console.WriteLine($"Findings: {execution.FindingCount}");
                 foreach (var severity in details.Severities)
                     Console.WriteLine($"  {Clean(severity.Severity)}: {severity.Count}");
@@ -66,7 +71,7 @@ internal static class QueryConsole
             Console.WriteLine($"Showing {page.Items.Count} of {page.TotalCount} {label} (skip {page.Skip}, take {page.Take}).");
     }
 
-    private static string Status(ScanSummary scan) => scan.Succeeded ? "Succeeded" : "Failed";
+    private static string Status(ScanSummary scan) => scan.Status.ToString();
 
     // Stored values may originate from a remote target. Keep each value on one
     // console line and avoid interpreting terminal control characters.

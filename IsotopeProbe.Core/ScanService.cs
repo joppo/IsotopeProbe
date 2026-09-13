@@ -1,18 +1,94 @@
 using IsotopeProbe.Domain;
 using IsotopeProbe.Nuclei;
 using IsotopeProbe.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 namespace IsotopeProbe;
 
 public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db)
 {
+    private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(10);
+
     public async Task<ScanExecution> RunAsync(
         string target, string? templatePath = null,
         CancellationToken cancellationToken = default)
     {
-        var execution = await runner.RunAsync(target, templatePath, cancellationToken);
+        var execution = new ScanExecution { Target = target, StartedAt = DateTimeOffset.UtcNow };
         db.ScanExecutions.Add(execution);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            using var startWrite = new CancellationTokenSource(WriteTimeout);
+            await db.SaveChangesAsync(startWrite.Token);
+        }
+        catch
+        {
+            throw new ScanPersistenceException("Could not confirm the Running execution was saved. Nuclei was not launched.");
+        }
+
+        NucleiRunResult result;
+        try
+        {
+            result = await runner.RunAsync(target, templatePath, async finding =>
+            {
+                finding.ScanExecutionId = execution.Id;
+                db.Findings.Add(finding);
+                using var findingWrite = new CancellationTokenSource(WriteTimeout);
+                await db.SaveChangesAsync(findingWrite.Token);
+            }, cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            // Also handles setup errors before the runner enters its process loop.
+            result = new NucleiRunResult(null, "",
+                $"Scanner setup failed ({exception.GetType().Name}).", false);
+        }
+
+        // This is the terminal decision point. Cancellation during the final write
+        // does not reverse an already chosen outcome or cancel its persistence.
+        var status = result.Cancelled ? ScanStatus.Cancelled
+            : result.FailureReason is not null || result.ExitCode != 0 ? ScanStatus.Failed
+            : cancellationToken.IsCancellationRequested ? ScanStatus.Cancelled
+            : ScanStatus.Succeeded;
+        var completedAt = DateTimeOffset.UtcNow;
+        var reason = result.FailureReason ?? (status == ScanStatus.Cancelled ? "Scan cancellation requested." : null);
+
+        // A failed finding write must not be retried as part of finalization.
+        foreach (var entry in db.ChangeTracker.Entries<Finding>().Where(x => x.State == EntityState.Added).ToList())
+        {
+            execution.Findings.Remove(entry.Entity);
+            entry.State = EntityState.Detached;
+        }
+
+        try
+        {
+            using var finalWrite = new CancellationTokenSource(WriteTimeout);
+            var updated = await db.ScanExecutions
+                .Where(x => x.Id == execution.Id && x.Status == ScanStatus.Running)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.Status, status)
+                    .SetProperty(x => x.CompletedAt, completedAt)
+                    .SetProperty(x => x.ExitCode, result.ExitCode)
+                    .SetProperty(x => x.StandardError, result.StandardError)
+                    .SetProperty(x => x.FailureReason, reason), finalWrite.Token);
+            if (updated != 1)
+                throw new ScanPersistenceException($"Execution {execution.Id} could not be finalized because it is no longer Running or was removed. No terminal state was overwritten.");
+        }
+        catch (ScanPersistenceException) { throw; }
+        catch
+        {
+            throw new ScanPersistenceException($"Could not confirm final status {status} was saved for execution {execution.Id}. Previously saved findings remain; the execution may still be Running. Inspect it when the database is available.");
+        }
+
+        execution.Status = status;
+        execution.CompletedAt = completedAt;
+        execution.ExitCode = result.ExitCode;
+        execution.StandardError = result.StandardError;
+        execution.FailureReason = reason;
+        // ExecuteUpdate bypasses tracking. Accept the persisted values as the new
+        // snapshot so marking this entry Unchanged cannot restore Running values.
+        var executionEntry = db.Entry(execution);
+        executionEntry.OriginalValues.SetValues(execution);
+        executionEntry.State = EntityState.Unchanged;
         return execution;
     }
 }

@@ -68,6 +68,7 @@ public sealed class ScanQueryServiceTests : IAsyncLifetime
         var newer = Scan(20, 1, "high", "low");
         var tied = Scan(30, 1);
         tied.ExitCode = 2;
+        tied.Status = ScanStatus.Failed;
         await Seed(older, newer, tied);
 
         var page = await _queries.ListScansAsync(0, 2);
@@ -117,6 +118,7 @@ public sealed class ScanQueryServiceTests : IAsyncLifetime
     {
         var scan = Scan(10, 0, "high", "high", "low");
         scan.ExitCode = 2;
+        scan.Status = ScanStatus.Failed;
         scan.StandardError = "scanner diagnostic";
         await Seed(scan, Scan(20, 1, "critical"));
 
@@ -171,6 +173,7 @@ public sealed class ScanQueryServiceTests : IAsyncLifetime
 
     private static ScanExecution Scan(int id, int day, params string[] severities) => new()
     {
+        Status = ScanStatus.Succeeded, ExitCode = 0,
         Id = id, Target = $"http://localhost/{id}",
         StartedAt = DateTimeOffset.Parse("2026-09-01T00:00:00Z").AddDays(day),
         CompletedAt = DateTimeOffset.Parse("2026-09-01T00:01:00Z").AddDays(day),

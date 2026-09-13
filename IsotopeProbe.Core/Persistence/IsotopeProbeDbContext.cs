@@ -18,6 +18,9 @@ public sealed class IsotopeProbeDbContext(
         execution.HasKey(x => x.Id);
         execution.Property(x => x.Id).UseIdentityByDefaultColumn();
 
+        execution.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
+        execution.Property(x => x.FailureReason).HasMaxLength(2000);
+
         execution.Ignore(x => x.Succeeded);
         execution.Ignore(x => x.Duration);
 

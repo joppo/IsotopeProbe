@@ -1,10 +1,48 @@
 # IsotopeProbe
 
-A .NET 10 console application that runs Nuclei and saves each completed execution
-and its findings to PostgreSQL before reporting success or failure. A nonzero
-Nuclei exit code does not discard findings. One SaveChangesAsync call saves the
-execution graph transactionally. Startup, parsing, or cancellation exceptions
-that prevent the runner from returning do not produce a saved execution.
+A .NET 10 console application that runs Nuclei, persists execution lifecycle state
+and findings in PostgreSQL, and queries saved results. Findings are saved one at a
+time as JSONL arrives, so later failure or cancellation does not discard earlier
+committed findings.
+
+## Execution lifecycle
+
+| Status | Meaning |
+| --- | --- |
+| Running | Saved before launching Nuclei; final outcome has not been persisted. |
+| Succeeded | Nuclei exited with code 0, output processing and all finding writes finished, and the terminal update committed. Zero findings is valid. |
+| Failed | Startup, parsing, finding persistence, process exit, or shutdown failed. Earlier saved findings remain. |
+| Cancelled | Cancellation was handled and the terminal update committed. Earlier saved findings remain. |
+
+`StartedAt` and `CompletedAt` use UTC. `CompletedAt` and `ExitCode` are nullable:
+a running scan has no completion time, and a scanner that never started has no
+exit code. An exit code of zero alone does not imply success. `FailureReason`
+contains a safe, bounded description of the failing stage and exception type,
+plus the native startup error code or process exit code when available.
+
+Ctrl+C is wired in CLI and propagated to Core. Core kills the scanner process tree
+where supported, waits for shutdown, and saves Cancelled with an independent
+cleanup token. A collected finding receives a write budget of 10 seconds even if
+cancellation arrives during that write. Process shutdown and final-state persistence
+each have a separate 10-second budget. Once the final outcome is chosen, Ctrl+C
+during its write does not change it. The final update only affects a Running row,
+so an existing terminal state cannot be overwritten.
+
+If the initial database write fails, Nuclei is not launched. If final persistence
+cannot be confirmed, CLI reports that explicitly and exits with failure; the row
+may remain Running. Successful query commands return 0, scan failures and
+unconfirmed persistence return 1, and handled cancellation returns 130.
+
+A crash, SIGKILL, or power loss can leave Running behind. **Running is the last
+persisted state, not proof that a process is alive.** `scans show` displays this
+caveat. No startup sweep changes Running rows: another process may own them.
+There are no heartbeats, recovery jobs, or automatic retries.
+
+Stderr is drained concurrently with stdout and does not determine success by itself.
+New `StandardError` values contain only a character-count summary; raw stderr and
+exception messages are omitted because they can contain credentials, authentication
+headers, or payloads. Finding JSON and all existing finding fields are retained as
+before. Historical diagnostic strings are left unchanged by the migration.
 
 ## Project structure
 
@@ -17,7 +55,7 @@ that prevent the runner from returning do not produce a saved execution.
 - `IsotopeProbe.Tests` references both projects to test CLI parsing and Core logic.
 
 The dependency is CLI → Core. Existing Core namespaces are retained so the
-migration and snapshot remain unchanged. Configuration still comes only from
+original migration history remains intact. Configuration still comes only from
 `ISOTOPEPROBE_CONNECTION_STRING`; no appsettings files or secrets are copied.
 Nuclei remains an external executable on PATH, with external template files.
 The existing Docker services and their assets are unchanged.
@@ -32,10 +70,14 @@ The existing Docker services and their assets are unchanged.
 - `IsotopeProbe.Cli/IsotopeProbeDbContextFactory.cs` reads
   `ISOTOPEPROBE_CONNECTION_STRING` for both the console and EF design-time tools.
   Migration commands instantiate this factory without running the scanner.
-- `IsotopeProbe.Core/Persistence/Migrations/` contains InitialCreate, its metadata, and the model
-  snapshot. The migration creates the tables, identity keys, foreign key with
-  cascade delete, and foreign-key index. No EnsureCreated or automatic migration
-  application is used.
+- `IsotopeProbe.Core/Persistence/Migrations/` contains `InitialCreate` and
+  `20260913204858_AddExecutionLifecycle`, their metadata, and the current snapshot.
+  The lifecycle migration adds `Status` and `FailureReason`, and allows null
+  completion times and exit codes. Historical statuses are derived from recorded
+  exit codes: zero becomes Succeeded, nonzero becomes Failed. Existing timestamps,
+  findings, and diagnostics are preserved. No EnsureCreated or automatic migration
+  application is used. Downgrade is refused if the old schema cannot represent
+  execution records without losing lifecycle information.
 - `dotnet-tools.json` pins dotnet-ef to 10.0.4, matching EF Core and Design 10.0.4.
   The existing Npgsql EF provider remains 10.0.3.
 
@@ -87,13 +129,9 @@ Inspect the latest saved execution and its findings in the existing container:
 
 ```bash
 docker exec -i isotope-postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
-SELECT e.*, e."ExitCode" = 0 AS succeeded,
+SELECT e.*, e."Status" = 'Succeeded' AS succeeded,
        (SELECT count(*) FROM findings f WHERE f."ScanExecutionId" = e."Id") AS finding_count
 FROM scan_executions e ORDER BY e."Id" DESC LIMIT 1;
-
-SELECT Id, ScanExecutionId, TemplateId, Name, Severity, MatchedAt, TemplatePath, Authors, Tags, Type, Host, Port, Scheme, Url, IpAddress, Timestamp, MatcherStatus, Request FROM Findings;
-
-SELECT Id, Target, StartedAt, CompletedAt, ExitCode, StandardError FROM scan_executions;
 
 SELECT "Id", "ScanExecutionId", "TemplateId", "Name", "Severity", "Authors", "Tags", "RawJson"
 FROM findings
@@ -124,9 +162,8 @@ Scan IDs must be positive integers. Unknown, duplicate, or incomplete options
 are rejected. Scan pages sort by start time descending, then ID descending;
 finding pages sort by ID ascending within the selected execution.
 
-Scan lists show ID, target, start time in UTC, outcome derived from the stored
-Nuclei exit code, and finding count. Scan details include start/completion times,
-exit code, stored standard error, and counts by severity. Finding lists show ID,
+Scan lists show ID, target, start time in UTC, persisted lifecycle status, and finding count. Scan details include start/completion times,
+available exit code, failure details, stderr summary, and counts by severity. Finding lists show ID,
 template ID, severity, and matched location, without JSON or request/response bodies.
 
 Query commands return exit code 0 on success, including empty lists and inspecting
@@ -170,36 +207,51 @@ dotnet ef migrations list --project IsotopeProbe.Core --startup-project IsotopeP
 dotnet ef migrations has-pending-model-changes --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli --no-build
 ```
 
-Tests cover argument validation, template selection and home-directory expansion,
-JSONL parsing (including unmapped JSON), exit status, EF mappings, and tracking a
-failed execution with findings. The existing migration remains
-`20260911123031_InitialCreate`; moving it into Core does not require a new migration.
-
-Verified after the split: build succeeded without warnings, all 23 tests passed,
-EF discovered the existing DbContext and migration, and no pending model changes
-were found. The localhost sanity scan saved execution 2 with five findings;
-the saved rows and unchanged migration history were checked in PostgreSQL.
-
-Query integration tests use the existing PostgreSQL provider and migrations, with
-no new test dependencies. Each test creates a unique `query_test_*` schema and
-drops that schema afterwards. Set a test connection string whose user can create
-schemas (prefer a local test database):
+Tests cover argument validation, template selection, JSONL parsing, EF mappings,
+query filtering/pagination, and lifecycle handling. Integration tests use the
+existing PostgreSQL provider and real migrations, without new dependencies.
+Each test creates and then removes its own `query_test_*` or `lifecycle_test_*`
+schema. Set a connection string whose user can create schemas, preferably in a
+local test database:
 
 ```bash
 read -rsp 'PostgreSQL test connection string: ' ISOTOPEPROBE_TEST_CONNECTION_STRING
 printf '\n'
 export ISOTOPEPROBE_TEST_CONNECTION_STRING
 dotnet test IsotopeProbe.slnx --no-restore
+# Run just lifecycle checks:
+dotnet test IsotopeProbe.slnx --no-restore --filter FullyQualifiedName~LifecycleTests
 ```
 
-Without this variable, the five PostgreSQL integration tests are explicitly
-skipped; parsing and service-validation tests still run. Integration coverage
-includes filtering, pagination, timestamp ties, severity aggregates, missing
-versus empty scans, no entity tracking, and cancellation. No Nuclei scans are
-performed by these tests.
+Without the test connection variable, database tests are explicitly skipped.
+Lifecycle process tests additionally require Linux, `/usr/bin/python3`, and
+`/bin/sleep`; they use a controlled temporary fake Nuclei executable. They exercise
+success with and without findings, startup failure, nonzero exit after findings,
+stderr drainage/redaction, malformed output, finding-write failure, cancellation
+and child shutdown, CLI SIGINT, CLI SIGKILL, finalization races, database-write
+failure reporting, and migration of historical rows. No external targets are scanned.
 
-Verified for the query commands: build succeeded with no warnings, all 55 tests
-passed (including all five PostgreSQL tests), and EF reported no pending model
-changes. CLI listing, details, pagination, missing IDs, and invalid arguments were
-checked against the local database with Nuclei absent from PATH. No new scans
-were launched during query verification.
+For a manual local scan, apply migrations and run the existing sanity templates:
+
+```bash
+dotnet ef database update --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli
+dotnet run --project IsotopeProbe.Cli -- http://localhost:8085 -templatepath "~/Templates/sanity/"
+dotnet run --project IsotopeProbe.Cli -- scans list
+dotnet run --project IsotopeProbe.Cli -- scans show 2
+dotnet run --project IsotopeProbe.Cli -- findings list --scan 2
+```
+
+Replace `2` with the saved execution ID. To inspect a scan while it runs, use
+`scans list`/`scans show` from another terminal. Press Ctrl+C during a sufficiently
+long local scan to cancel it, then inspect its status and findings. The fake-scanner
+automated tests provide deterministic cancellation and forced-termination checks
+when the sanity scan completes too quickly for manual interruption.
+
+Verified for lifecycle handling: all 71 automated tests passed with none skipped,
+using local PostgreSQL and fake scanner processes on Linux. EF reports no pending
+model changes. The tests apply migrations only inside temporary schemas; the main
+database still needs the migration command above. No real Nuclei scan or manual
+Ctrl+C test was run for this milestone. Actual database outages were not induced:
+initial/final write failures were simulated with EF interceptors, while finding
+write failure was exercised through a real PostgreSQL JSON rejection. Process
+cleanup on other operating systems has not been verified.

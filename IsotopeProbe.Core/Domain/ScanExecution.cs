@@ -6,12 +6,14 @@ public sealed class ScanExecution
 
     public string Target { get; set; } = "";
     public DateTimeOffset StartedAt { get; set; }
-    public DateTimeOffset CompletedAt { get; set; }
-    public int ExitCode { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+    public int? ExitCode { get; set; }
+    public ScanStatus Status { get; set; } = ScanStatus.Running;
+    public string? FailureReason { get; set; }
     public string StandardError { get; set; } = "";
 
     public List<Finding> Findings { get; set; } = [];
 
-    public bool Succeeded => ExitCode == 0;
-    public TimeSpan Duration => CompletedAt - StartedAt;
+    public bool Succeeded => Status == ScanStatus.Succeeded;
+    public TimeSpan? Duration => CompletedAt - StartedAt;
 }

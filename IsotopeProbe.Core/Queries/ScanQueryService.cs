@@ -17,7 +17,7 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
         var items = await scans.OrderByDescending(x => x.StartedAt).ThenByDescending(x => x.Id)
             .Skip(skip).Take(take)
             .Select(x => new ScanSummary(x.Id, x.Target, x.StartedAt, x.CompletedAt,
-                x.ExitCode, x.Findings.Count))
+                x.ExitCode, x.Findings.Count, x.Status))
             .ToListAsync(cancellationToken);
         return new Page<ScanSummary>(items, total, skip, take);
     }
@@ -29,8 +29,9 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
             .Select(x => new
             {
                 Execution = new ScanSummary(x.Id, x.Target, x.StartedAt, x.CompletedAt,
-                    x.ExitCode, x.Findings.Count),
-                x.StandardError
+                    x.ExitCode, x.Findings.Count, x.Status),
+                x.StandardError,
+                x.FailureReason
             })
             .SingleOrDefaultAsync(cancellationToken);
         if (scan is null)
@@ -40,7 +41,7 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
             .GroupBy(x => x.Severity).OrderBy(x => x.Key)
             .Select(x => new SeverityCount(x.Key, x.Count()))
             .ToListAsync(cancellationToken);
-        return new ScanDetails(scan.Execution, scan.StandardError, severities);
+        return new ScanDetails(scan.Execution, scan.StandardError, scan.FailureReason, severities);
     }
 
     public async Task<Page<FindingSummary>?> ListFindingsAsync(
