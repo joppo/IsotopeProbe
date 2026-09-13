@@ -38,6 +38,9 @@ public sealed class NucleiFindingParserTests
 
         var finding = _parser.Parse(json);
 
+        Assert.Equal(json, finding.RawJson);
+        using var original = JsonDocument.Parse(finding.RawJson);
+        Assert.Equal("ZW5jb2RlZC10ZW1wbGF0ZQ==", original.RootElement.GetProperty("template-encoded").GetString());
         Assert.Equal("poc-test", finding.TemplateId);
         Assert.Equal("PoC Test", finding.Name);
         Assert.Equal("info", finding.Severity);

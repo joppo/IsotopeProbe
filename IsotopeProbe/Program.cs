@@ -1,4 +1,5 @@
 using IsotopeProbe.Nuclei;
+using IsotopeProbe.Persistence;
 
 if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
 {
@@ -8,8 +9,13 @@ if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
 
 try
 {
+    await using var db = new IsotopeProbeDbContextFactory().CreateDbContext([]);
     var runner = new NucleiRunner(new NucleiFindingParser());
     var execution = await runner.RunAsync(args[0]);
+
+    db.ScanExecutions.Add(execution);
+    await db.SaveChangesAsync();
+    Console.WriteLine($"Saved scan execution {execution.Id}.");
 
     foreach (var finding in execution.Findings)
     {

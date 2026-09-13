@@ -12,21 +12,24 @@ public sealed class ScanExecutionTests
     public void Succeeded_DependsOnExitCodeAndRetainsFindings(
         int exitCode, int findingCount, bool expectedSucceeded)
     {
-        IReadOnlyList<Finding> findings = findingCount == 0 ? [] : [new Finding
+        List<Finding> findings = findingCount == 0 ? [] : [new Finding
         {
+            RawJson = "{}",
             TemplateId = "template",
             Name = "name",
             Severity = "info",
             MatchedAt = "https://example.com"
         }];
         var startedAt = DateTimeOffset.Parse("2026-08-31T12:00:00Z");
-        var execution = new ScanExecution(
-            "https://example.com",
-            startedAt,
-            startedAt.AddSeconds(2),
-            exitCode,
-            exitCode == 0 ? string.Empty : "nuclei error",
-            findings);
+        var execution = new ScanExecution
+        {
+            Target = "https://example.com",
+            StartedAt = startedAt,
+            CompletedAt = startedAt.AddSeconds(2),
+            ExitCode = exitCode,
+            StandardError = exitCode == 0 ? string.Empty : "nuclei error",
+            Findings = findings
+        };
 
         Assert.Equal(expectedSucceeded, execution.Succeeded);
         Assert.Equal(exitCode, execution.ExitCode);

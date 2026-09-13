@@ -12,13 +12,14 @@ public sealed class NucleiFindingParser
 
         return new Finding
         {
+            RawJson = jsonLine,
             TemplateId = Required(dto.TemplateId, "template-id"),
             Name = Required(dto.Info?.Name, "info.name"),
             Severity = Required(dto.Info?.Severity, "info.severity"),
             MatchedAt = Required(dto.MatchedAt, "matched-at"),
             TemplatePath = dto.TemplatePath,
-            Authors = dto.Info?.Authors?.AsReadOnly() ?? [],
-            Tags = dto.Info?.Tags?.AsReadOnly() ?? [],
+            Authors = dto.Info?.Authors ?? [],
+            Tags = dto.Info?.Tags ?? [],
             Type = dto.Type,
             Host = dto.Host,
             Port = dto.Port,

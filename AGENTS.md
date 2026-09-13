@@ -11,15 +11,16 @@ Build the smallest possible vertical slice:
 3. Nuclei outputs JSONL to stdout.
 4. Application reads stdout line-by-line.
 5. JSONL findings are deserialized into C# objects.
-6. Results are printed to the console.
+6. Executions and findings are saved to PostgreSQL using EF Core and Npgsql.
+7. Results are printed to the console.
 
 ## Architecture
 
-For now this is a simple .NET console application.
+This is a simple .NET console application with PostgreSQL persistence.
+Use EF Core migrations; do not use EnsureCreated. Keep connection credentials in environment variables.
 
 Do NOT introduce:
 - Docker
-- PostgreSQL
 - web APIs
 - message queues
 - scheduling

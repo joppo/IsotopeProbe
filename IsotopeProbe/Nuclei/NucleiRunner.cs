@@ -6,7 +6,7 @@ namespace IsotopeProbe.Nuclei;
 public sealed class NucleiRunner(NucleiFindingParser parser)
 {
     public async Task<ScanExecution> RunAsync(
-        string target,
+        string target, string templatePath,
         CancellationToken cancellationToken = default)
     {
         var findings = new List<Finding>();
@@ -21,6 +21,8 @@ public sealed class NucleiRunner(NucleiFindingParser parser)
 
         startInfo.ArgumentList.Add("-u");
         startInfo.ArgumentList.Add(target);
+        startInfo.ArgumentList.Add("-templatepath");
+        startInfo.ArgumentList.Add(templatePath);   
         startInfo.ArgumentList.Add("-jsonl");
         startInfo.ArgumentList.Add("-silent");
 
@@ -52,12 +54,14 @@ public sealed class NucleiRunner(NucleiFindingParser parser)
         var standardError = await standardErrorTask;
         var completedAt = DateTimeOffset.UtcNow;
 
-        return new ScanExecution(
-            target,
-            startedAt,
-            completedAt,
-            process.ExitCode,
-            standardError,
-            findings.AsReadOnly());
+        return new ScanExecution
+        {
+            Target = target,
+            StartedAt = startedAt,
+            CompletedAt = completedAt,
+            ExitCode = process.ExitCode,
+            StandardError = standardError,
+            Findings = findings
+        };
     }
 }
