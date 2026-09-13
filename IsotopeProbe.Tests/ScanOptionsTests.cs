@@ -1,3 +1,4 @@
+using IsotopeProbe.Cli;
 using IsotopeProbe.Nuclei;
 
 namespace IsotopeProbe.Tests;

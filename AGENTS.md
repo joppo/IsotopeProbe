@@ -16,7 +16,11 @@ Build the smallest possible vertical slice:
 
 ## Architecture
 
-This is a simple .NET console application with PostgreSQL persistence.
+The application is split into IsotopeProbe.Cli (executable startup, arguments,
+configuration, wiring, and console presentation) and IsotopeProbe.Core (scan
+orchestration, Nuclei execution/parsing, domain entities, and EF persistence).
+IsotopeProbe.Cli references IsotopeProbe.Core; Core must not reference CLI.
+Keep existing migrations and database schema unchanged during structural refactors.
 Use EF Core migrations; do not use EnsureCreated. Keep connection credentials in environment variables.
 
 Do NOT introduce:
@@ -50,9 +54,10 @@ Add tests for parsing and non-trivial logic.
 - Expand a leading `~/` to the user's home directory, including quoted paths.
   Preserve paths containing spaces as a single process argument.
 - Local testing example:
-  `dotnet run --project IsotopeProbe -- http://localhost:8085 -templatepath "~/Templates/sanity/"`.
+  `dotnet run --project IsotopeProbe.Cli -- http://localhost:8085 -templatepath "~/Templates/sanity/"`.
 
 ## Specs
 
 The location is ~/z/p/nuclei/isotopeprobe
-The console app should be created in here with that name - IsotopeProbe
+The solution is IsotopeProbe.slnx, with IsotopeProbe.Cli and IsotopeProbe.Core
+application projects and the existing IsotopeProbe.Tests project.

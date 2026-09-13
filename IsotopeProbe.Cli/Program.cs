@@ -1,27 +1,36 @@
 using IsotopeProbe;
 using IsotopeProbe.Nuclei;
-using IsotopeProbe.Persistence;
+using IsotopeProbe.Cli;
+using IsotopeProbe.Queries;
 
-ScanOptions options;
+ScanOptions? options = null;
+QueryOptions? queryOptions = null;
 try
 {
-    options = ScanOptions.Parse(args);
+    if (QueryOptions.IsQuery(args))
+        queryOptions = QueryOptions.Parse(args);
+    else
+        options = ScanOptions.Parse(args);
 }
 catch (ArgumentException exception)
 {
     Console.Error.WriteLine(exception.Message);
     Console.Error.WriteLine("Usage: IsotopeProbe <target> [-templatepath <path>]");
+    Console.Error.WriteLine("       IsotopeProbe scans list [--skip <n>] [--take <n>]");
+    Console.Error.WriteLine("       IsotopeProbe scans show <id>");
+    Console.Error.WriteLine("       IsotopeProbe findings list --scan <id> [--skip <n>] [--take <n>]");
     return 1;
 }
 
 try
 {
     await using var db = new IsotopeProbeDbContextFactory().CreateDbContext([]);
-    var runner = new NucleiRunner(new NucleiFindingParser());
-    var execution = await runner.RunAsync(options.Target, options.TemplatePath);
+    if (queryOptions is not null)
+        return await QueryConsole.RunAsync(queryOptions, new ScanQueryService(db));
 
-    db.ScanExecutions.Add(execution);
-    await db.SaveChangesAsync();
+    var runner = new NucleiRunner(new NucleiFindingParser());
+    var scanService = new ScanService(runner, db);
+    var execution = await scanService.RunAsync(options!.Target, options.TemplatePath);
     Console.WriteLine($"Saved scan execution {execution.Id}.");
 
     foreach (var finding in execution.Findings)

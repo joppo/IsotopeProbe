@@ -1,7 +1,8 @@
+using IsotopeProbe.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 
-namespace IsotopeProbe.Persistence;
+namespace IsotopeProbe.Cli;
 
 public sealed class IsotopeProbeDbContextFactory : IDesignTimeDbContextFactory<IsotopeProbeDbContext>
 {

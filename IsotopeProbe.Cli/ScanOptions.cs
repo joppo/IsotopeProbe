@@ -1,4 +1,4 @@
-namespace IsotopeProbe;
+namespace IsotopeProbe.Cli;
 
 public sealed record ScanOptions(string Target, string? TemplatePath)
 {

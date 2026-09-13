@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -19,7 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\IsotopeProbe\IsotopeProbe.csproj" />
+    <ProjectReference Include="../IsotopeProbe.Core/IsotopeProbe.Core.csproj" />
+    <ProjectReference Include="../IsotopeProbe.Cli/IsotopeProbe.Cli.csproj" />
   </ItemGroup>
 
 </Project>
