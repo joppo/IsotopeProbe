@@ -1,7 +1,8 @@
 # IsotopeProbe
 
-A .NET 10 console application that runs Nuclei, persists execution lifecycle state
-and findings in PostgreSQL, and queries saved results. Findings are saved one at a
+A .NET 10 application that runs Nuclei through a CLI, persists execution lifecycle
+state and findings in PostgreSQL, and browses saved results through CLI queries
+or a local Razor Pages website. Findings are saved one at a
 time as JSONL arrives, so later failure or cancellation does not discard earlier
 committed findings.
 
@@ -52,11 +53,14 @@ before. Historical diagnostic strings are left unchanged by the migration.
 - `IsotopeProbe.Core` is the class library: `ScanService` runs and saves a scan;
   `Nuclei/` contains process execution, DTOs, and JSONL parsing; `Domain/` contains
   entities; `Persistence/` contains the DbContext and existing migrations.
-- `IsotopeProbe.Tests` references both projects to test CLI parsing and Core logic.
+- `IsotopeProbe.Web` is an ASP.NET Core Razor Pages host for read-only execution
+  and finding browsing. It registers Core’s DbContext and query service per request.
+- `IsotopeProbe.Tests` references CLI and Core to test CLI parsing and Core logic.
 
-The dependency is CLI → Core. Existing Core namespaces are retained so the
-original migration history remains intact. Configuration still comes only from
-`ISOTOPEPROBE_CONNECTION_STRING`; no appsettings files or secrets are copied.
+The dependencies are CLI → Core and Web → Core. Web does not reference or invoke
+CLI. Existing Core namespaces are retained so the original migration history
+remains intact. Configuration still comes only from
+`ISOTOPEPROBE_CONNECTION_STRING`; no connection strings or secrets are committed.
 Nuclei remains an external executable on PATH, with external template files.
 The existing Docker services and their assets are unchanged.
 
@@ -87,6 +91,8 @@ or property order. See [Npgsql JSON mapping](https://www.npgsql.org/efcore/mappi
 
 ## Run locally
 
+Install the .NET 10 SDK and have a PostgreSQL server/database available (the existing
+local container can be used). Nuclei is required only for CLI scans, not browsing.
 From the repository root, restore the tools and dependencies:
 
 ```bash
@@ -94,7 +100,7 @@ dotnet tool restore
 dotnet restore IsotopeProbe.slnx
 ```
 
-Enter the connection string for your existing PostgreSQL container interactively
+Enter the connection string for your PostgreSQL database interactively
 so credentials are not recorded in shell history or committed to a file:
 
 ```bash
@@ -104,7 +110,7 @@ export ISOTOPEPROBE_CONNECTION_STRING
 ```
 
 Connection string format: `Host=localhost;Port=5432;Database=<database>;Username=<user>;Password=<password>`.
-Use the credentials and database already configured in your container.
+Use the credentials and database configured in your PostgreSQL instance.
 
 Apply the migration (this changes your database):
 
@@ -177,7 +183,7 @@ and the total count.
 `IsotopeProbe.Core/Queries/ScanQueryService.cs` accepts an
 `IsotopeProbeDbContext` through its constructor, matching the project's existing
 explicit wiring. `QueryModels.cs` contains materialized read models, with no
-console dependencies or tracked entities. All three methods accept cancellation:
+console dependencies or tracked entities. All query methods accept cancellation:
 
 ```csharp
 using IsotopeProbe.Queries;
@@ -186,15 +192,51 @@ var queries = new ScanQueryService(db);
 var scans = await queries.ListScansAsync(skip: 0, take: 20, cancellationToken: cancellationToken);
 var scan = await queries.GetScanAsync(id, cancellationToken);
 var findings = await queries.ListFindingsAsync(id, skip: 0, take: 20,
-    cancellationToken: cancellationToken);
+    cancellationToken: cancellationToken, severity: "high");
+var finding = await queries.GetFindingAsync(findingId, cancellationToken);
 ```
 
 `GetScanAsync` and `ListFindingsAsync` return null for an unknown scan. List results
 contain `Items`, `TotalCount`, `Skip`, and `Take`. EF applies filtering, ordering,
 pagination, and aggregate counts in PostgreSQL using read-only projections.
 Counts and pages are separate queries, so concurrent writes can change totals
-between reads. A future Web application can reference Core and supply a DbContext
-and query service per request, then render these DTOs without invoking the CLI.
+between reads. `ListFindingsAsync` optionally filters by an exact stored severity
+before counting and paging; omitting it preserves CLI behavior. `GetFindingAsync`
+returns an untracked details DTO, or null for an unknown positive ID. Description
+and extracted results remain in RawJson and are prepared for display by Web.
+No database schema changes are required.
+
+## Browse results locally
+
+After configuring `ISOTOPEPROBE_CONNECTION_STRING` and applying migrations as above,
+run a scan against your local target:
+
+```bash
+dotnet run --project IsotopeProbe.Cli -- http://localhost:8085 -templatepath "~/Templates/sanity/"
+dotnet run --project IsotopeProbe.Web --launch-profile IsotopeProbe.Web
+```
+
+Open **http://localhost:5080/**. The launch profile binds to localhost. In another
+terminal, export the same connection variable before starting Web. Web does not
+apply migrations at startup; use the explicit EF command in the setup section.
+
+The landing page lists executions newest first, with 20 rows per page. Select an
+execution to see its metadata, whole-execution severity counts, and paginated
+findings. The severity filter is preserved across pages. Select a finding to see
+stored fields, description, and expandable evidence/raw JSON. For example,
+`http://localhost:5080/executions/2` and `http://localhost:5080/findings/5` work when
+those IDs exist. Unknown IDs return HTTP 404; an execution with zero findings
+has its own empty state. All execution times are labeled UTC; scanner timestamps
+retain their stored offset, if supplied.
+
+This milestone is **local and read-only, with no authentication**. Keep the host
+bound to localhost. There are no scan-start/cancellation actions, background
+workers, or automatic refresh. Reload to see newly saved results. Running means
+only the last saved state; it does not establish that Nuclei is still alive.
+Browsing invokes Core queries directly and never starts Nuclei or saves records.
+Scanner and target content is rendered as encoded text, including request/response
+bodies and raw JSON. Database failures show a generic setup/connectivity message
+without connection strings or stack traces in the page.
 
 ## Verification
 
@@ -255,3 +297,14 @@ Ctrl+C test was run for this milestone. Actual database outages were not induced
 initial/final write failures were simulated with EF interceptors, while finding
 write failure was exercised through a real PostgreSQL JSON rejection. Process
 cleanup on other operating systems has not been verified.
+
+Verified for the Web milestone: solution build succeeded with no warnings, and all
+73 tests passed with local PostgreSQL (none skipped). HTTP smoke checks against an
+isolated temporary schema covered execution/finding browsing, pagination, severity
+filtering, empty states, unknown IDs, invalid pagination, HTML-like evidence, and
+safe database-error responses in Development. The Web connection used read-only
+transactions and before/after snapshots confirmed that browsing left all records
+unchanged. No Nuclei process was launched by browsing. Browser tooling was not
+available, so visual layout and interactive browser inspection remain manual checks;
+long text and HTML encoding were checked in rendered HTTP responses. No external
+targets were scanned, and the main database schema was not changed.

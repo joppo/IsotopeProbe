@@ -18,3 +18,10 @@ public sealed record ScanDetails(
 
 public sealed record FindingSummary(
     int Id, string TemplateId, string Name, string Severity, string MatchedAt);
+
+public sealed record FindingDetails(
+    int Id, int ScanExecutionId, string TemplateId, string Name, string Severity,
+    string MatchedAt, string? TemplatePath, IReadOnlyList<string> Authors,
+    IReadOnlyList<string> Tags, string? Type, string? Host, string? Port, string? Scheme,
+    string? Url, string? IpAddress, string? Timestamp, bool? MatcherStatus,
+    string? Request, string? Response, string? CurlCommand, string RawJson);

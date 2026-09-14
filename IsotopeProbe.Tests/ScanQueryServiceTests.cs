@@ -164,6 +164,52 @@ public sealed class ScanQueryServiceTests : IAsyncLifetime
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _queries.ListFindingsAsync(1, cancellationToken: cancellation.Token));
     }
 
+    [PostgresFact]
+    public async Task SeverityFilter_IsAppliedWithinExecutionBeforeCountingAndPagination()
+    {
+        var scan = Scan(10, 0, "high", "low", "high", "high");
+        for (var i = 0; i < scan.Findings.Count; i++) scan.Findings[i].Id = 101 + i;
+        await Seed(scan, Scan(20, 1, "high"));
+        var page = await _queries.ListFindingsAsync(10, 1, 1, severity: "high");
+        Assert.Equal(3, page!.TotalCount);
+        Assert.Equal(103, Assert.Single(page.Items).Id);
+        Assert.Empty((await _queries.ListFindingsAsync(10, 3, severity: "high"))!.Items);
+        Assert.Equal(0, (await _queries.ListFindingsAsync(10, severity: "missing"))!.TotalCount);
+        Assert.Null(await _queries.ListFindingsAsync(99, severity: "high"));
+        Assert.Equal(4, (await _queries.GetScanAsync(10))!.Execution.FindingCount);
+        Assert.Equal(2, (await _queries.GetScanAsync(10))!.Severities.Count);
+        Assert.Empty(_db.ChangeTracker.Entries());
+    }
+
+    [PostgresFact]
+    public async Task GetFinding_ReturnsStoredDetailsWithoutTrackingAndHandlesMissingId()
+    {
+        var scan = Scan(10, 0, "high");
+        var finding = scan.Findings[0];
+        finding.Id = 101;
+        finding.Request = "<script>alert('request')</script>";
+        finding.Response = "<html>untrusted</html>";
+        finding.Authors = ["author"];
+        finding.Tags = ["tag"];
+        finding.RawJson = "{\"info\":{\"description\":\"<b>description</b>\"},\"extracted-results\":[\"evidence\"]}";
+        await Seed(scan, Scan(20, 1, "low"));
+        var result = await _queries.GetFindingAsync(101);
+        Assert.NotNull(result);
+        Assert.Equal(10, result.ScanExecutionId);
+        Assert.Equal(finding.TemplateId, result.TemplateId);
+        Assert.Equal(finding.Request, result.Request);
+        Assert.Equal(finding.Response, result.Response);
+        Assert.Equal(finding.Authors, result.Authors);
+        Assert.Equal(finding.Tags, result.Tags);
+        using var json = System.Text.Json.JsonDocument.Parse(result.RawJson);
+        Assert.Equal("<b>description</b>", json.RootElement.GetProperty("info").GetProperty("description").GetString());
+        Assert.Null(await _queries.GetFindingAsync(999));
+        Assert.Empty(_db.ChangeTracker.Entries());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => _queries.GetFindingAsync(101, cancellation.Token));
+    }
+
     private async Task Seed(params ScanExecution[] scans)
     {
         _db.ScanExecutions.AddRange(scans);

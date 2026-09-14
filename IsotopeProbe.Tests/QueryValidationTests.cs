@@ -26,6 +26,7 @@ public sealed class QueryValidationTests
         using var db = CreateContext();
         var queries = new ScanQueryService(db);
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => queries.GetScanAsync(id));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => queries.GetFindingAsync(id));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => queries.ListFindingsAsync(id));
     }
 

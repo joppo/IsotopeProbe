@@ -1,0 +1,41 @@
+@page "/executions/{id:int}"
+@model IsotopeProbe.Web.Pages.Executions.DetailsModel
+@{ var scan = Model.Scan.Execution; ViewData["Title"] = $"Execution {scan.Id}"; }
+<p><a asp-page="/Index">All executions</a></p>
+<h1>Execution @scan.Id</h1>
+<dl>
+<dt>Target URL</dt><dd>@scan.Target</dd>
+<dt>Persisted status</dt><dd><span class="badge @Display.Tone(scan.Status.ToString())">@scan.Status</span></dd>
+<dt>Started (UTC)</dt><dd>@Display.Utc(scan.StartedAt)</dd>
+<dt>Completed (UTC)</dt><dd>@Display.Utc(scan.CompletedAt)</dd>
+<dt>Exit code</dt><dd>@(scan.ExitCode?.ToString() ?? "Unavailable")</dd>
+<dt>Failure details</dt><dd class="evidence">@(Model.Scan.FailureReason ?? "None recorded")</dd>
+</dl>
+<p>Running is the last persisted state, not proof that a scanner process is alive.</p>
+@if (!string.IsNullOrEmpty(Model.Scan.StandardError)) { <details><summary>Stored stderr diagnostic</summary><pre>@Model.Scan.StandardError</pre></details> }
+<h2>Severity counts · entire execution</h2>
+<p>@scan.FindingCount total finding(s).</p>
+<ul>@foreach (var severity in Model.Scan.Severities) { <li><span class="badge @Display.Tone(severity.Severity)">@severity.Severity</span>: @severity.Count</li> }</ul>
+<h2>Findings</h2>
+<form method="get">
+<label for="severity">Severity</label>
+<select id="severity" name="severity">
+<option value="">All severities</option>
+@foreach (var severity in Model.Scan.Severities) { <option value="@severity.Severity" selected="@(severity.Severity == Model.Severity)">@severity.Severity</option> }
+@if (Model.Severity is not null && !Model.Scan.Severities.Any(x => x.Severity == Model.Severity)) { <option selected value="@Model.Severity">@Model.Severity</option> }
+</select><button type="submit">Filter</button>
+</form>
+<p>@Model.Findings.TotalCount matching finding(s).</p>
+@if (scan.FindingCount == 0) { <p>This execution has no saved findings.</p> }
+else if (Model.Findings.TotalCount == 0) { <p>No findings match this severity.</p> }
+else if (Model.Findings.Items.Count == 0) { <p>No findings on this page. <a asp-route-id="@scan.Id" asp-route-severity="@Model.Severity" asp-route-skip="0">Return to the first page</a>.</p> }
+else {
+<div class="table-scroll"><table><thead><tr><th>ID</th><th>Template ID / name</th><th>Severity</th><th>Matched location</th></tr></thead>
+<tbody>@foreach (var finding in Model.Findings.Items) {
+<tr><td><a asp-page="/Findings/Details" asp-route-id="@finding.Id">@finding.Id</a></td><td>@finding.TemplateId<br />@finding.Name</td><td><span class="badge @Display.Tone(finding.Severity)">@finding.Severity</span></td><td>@finding.MatchedAt</td></tr>
+}</tbody></table></div>
+}
+<nav aria-label="Findings pagination">
+@if (Model.Findings.Skip > 0) { <a asp-route-id="@scan.Id" asp-route-severity="@Model.Severity" asp-route-skip="@Math.Max(0, Model.Findings.Skip - 20)">Previous</a> }
+@if ((long)Model.Findings.Skip + 20 < Model.Findings.TotalCount) { <a asp-route-id="@scan.Id" asp-route-severity="@Model.Severity" asp-route-skip="@(Model.Findings.Skip + 20)">Next</a> }
+</nav>

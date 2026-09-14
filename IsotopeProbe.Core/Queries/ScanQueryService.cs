@@ -45,7 +45,8 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
     }
 
     public async Task<Page<FindingSummary>?> ListFindingsAsync(
-        int scanId, int skip = 0, int take = DefaultTake, CancellationToken cancellationToken = default)
+        int scanId, int skip = 0, int take = DefaultTake, CancellationToken cancellationToken = default,
+        string? severity = null)
     {
         ValidateScanId(scanId);
         ValidatePagination(skip, take);
@@ -53,6 +54,8 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
             return null;
 
         var findings = db.Findings.AsNoTracking().Where(x => x.ScanExecutionId == scanId);
+        if (severity is not null)
+            findings = findings.Where(x => x.Severity == severity);
         var total = await findings.CountAsync(cancellationToken);
         // Findings have no consistently populated scan-time timestamp. Their unique ID
         // provides a stable order within an execution.
@@ -60,6 +63,18 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
             .Select(x => new FindingSummary(x.Id, x.TemplateId, x.Name, x.Severity, x.MatchedAt))
             .ToListAsync(cancellationToken);
         return new Page<FindingSummary>(items, total, skip, take);
+    }
+
+    public async Task<FindingDetails?> GetFindingAsync(int id, CancellationToken cancellationToken = default)
+    {
+        if (id <= 0)
+            throw new ArgumentOutOfRangeException(nameof(id), "Finding ID must be a positive integer.");
+        return await db.Findings.AsNoTracking().Where(x => x.Id == id)
+            .Select(x => new FindingDetails(x.Id, x.ScanExecutionId, x.TemplateId, x.Name,
+                x.Severity, x.MatchedAt, x.TemplatePath, x.Authors, x.Tags, x.Type,
+                x.Host, x.Port, x.Scheme, x.Url, x.IpAddress, x.Timestamp, x.MatcherStatus,
+                x.Request, x.Response, x.CurlCommand, x.RawJson))
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     public static void ValidatePagination(int skip, int take)

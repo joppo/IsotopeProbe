@@ -13,13 +13,17 @@ Build the smallest possible vertical slice:
 5. JSONL findings are deserialized into C# objects.
 6. Executions and findings are saved to PostgreSQL using EF Core and Npgsql.
 7. Results are printed to the console.
+8. Saved results can be browsed locally through read-only Razor Pages.
 
 ## Architecture
 
 The application is split into IsotopeProbe.Cli (executable startup, arguments,
 configuration, wiring, and console presentation) and IsotopeProbe.Core (scan
-orchestration, Nuclei execution/parsing, domain entities, and EF persistence).
-IsotopeProbe.Cli references IsotopeProbe.Core; Core must not reference CLI.
+orchestration, Nuclei execution/parsing, domain entities, and EF persistence), plus
+IsotopeProbe.Web (local read-only Razor Pages).
+CLI and Web reference Core; Core must not reference either host, and Web must not
+reference CLI. Web calls Core query services, never launches scans, and never
+applies migrations on startup.
 Keep existing migrations and database schema unchanged during structural refactors.
 Use EF Core migrations; do not use EnsureCreated. Keep connection credentials in environment variables.
 
@@ -59,5 +63,5 @@ Add tests for parsing and non-trivial logic.
 ## Specs
 
 The location is ~/z/p/nuclei/isotopeprobe
-The solution is IsotopeProbe.slnx, with IsotopeProbe.Cli and IsotopeProbe.Core
+The solution is IsotopeProbe.slnx, with IsotopeProbe.Cli, IsotopeProbe.Core, and IsotopeProbe.Web
 application projects and the existing IsotopeProbe.Tests project.

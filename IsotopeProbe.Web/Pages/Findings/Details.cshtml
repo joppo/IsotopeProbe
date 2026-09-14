@@ -1,0 +1,27 @@
+@page "/findings/{id:int}"
+@model IsotopeProbe.Web.Pages.Findings.DetailsModel
+@{ var f = Model.Finding; ViewData["Title"] = $"Finding {f.Id}"; }
+<p><a asp-page="/Executions/Details" asp-route-id="@f.ScanExecutionId">Back to execution @f.ScanExecutionId</a></p>
+<h1>Finding @f.Id · @f.Name</h1>
+<h2>Template</h2>
+<dl>
+<dt>Template ID</dt><dd>@f.TemplateId</dd><dt>Name</dt><dd>@f.Name</dd>
+<dt>Severity</dt><dd><span class="badge @Display.Tone(f.Severity)">@f.Severity</span></dd>
+<dt>Template path</dt><dd>@f.TemplatePath</dd><dt>Authors</dt><dd>@string.Join(", ", f.Authors)</dd>
+<dt>Tags</dt><dd>@string.Join(", ", f.Tags)</dd><dt>Type</dt><dd>@f.Type</dd>
+</dl>
+@if (Model.Description is not null) { <h2>Description</h2><p class="evidence">@Model.Description</p> }
+<h2>Location and matching</h2>
+<dl>
+<dt>Matched location</dt><dd>@f.MatchedAt</dd><dt>Host</dt><dd>@f.Host</dd>
+<dt>Port</dt><dd>@f.Port</dd><dt>Scheme</dt><dd>@f.Scheme</dd><dt>URL</dt><dd>@f.Url</dd>
+<dt>IP address</dt><dd>@f.IpAddress</dd>
+<dt>Scanner timestamp (original timezone/offset as stored; may be unspecified)</dt><dd>@f.Timestamp</dd>
+<dt>Matcher status</dt><dd>@(f.MatcherStatus?.ToString() ?? "Unavailable")</dd>
+</dl>
+<h2>Evidence</h2>
+@if (f.Request is not null) { <details><summary>Request</summary><pre>@f.Request</pre></details> }
+@if (f.Response is not null) { <details><summary>Response</summary><pre>@f.Response</pre></details> }
+@if (f.CurlCommand is not null) { <details><summary>Curl command (stored text)</summary><pre>@f.CurlCommand</pre></details> }
+@if (Model.ExtractedResults is not null) { <details><summary>Extracted results</summary><pre>@Model.ExtractedResults</pre></details> }
+<details><summary>Raw JSON · all stored fields</summary><pre>@f.RawJson</pre></details>

@@ -2,4 +2,5 @@
   <Project Path="IsotopeProbe.Cli/IsotopeProbe.Cli.csproj" />
   <Project Path="IsotopeProbe.Core/IsotopeProbe.Core.csproj" />
   <Project Path="IsotopeProbe.Tests/IsotopeProbe.Tests.csproj" />
+  <Project Path="IsotopeProbe.Web/IsotopeProbe.Web.csproj" />
 </Solution>
