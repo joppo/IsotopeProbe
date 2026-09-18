@@ -1,0 +1,9 @@
+@page
+@model IsotopeProbe.Web.Pages.Account.LoginModel
+@{ ViewData["Title"] = "Sign in"; }
+<h1>Sign in</h1>
+<p>Sign in to browse your scan results. New accounts start with no scans or groups.</p>
+<form method="post">
+    <input type="hidden" name="returnUrl" value="@Model.ReturnUrl" />
+    <button type="submit">Sign in with Google</button>
+</form>

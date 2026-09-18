@@ -23,7 +23,12 @@ orchestration, Nuclei execution/parsing, domain entities, and EF persistence), p
 IsotopeProbe.Web (local read-only Razor Pages).
 CLI and Web reference Core; Core must not reference either host, and Web must not
 reference CLI. Web calls Core query services, never launches scans, and never
-applies migrations on startup.
+applies migrations on startup. Web requires Google sign-in and uses only
+OwnedScanQueryService with the internal user ID from the validated session;
+TrustedScanQueryService and ownership/group mutation commands are CLI-only.
+Groups grant no additional scan access. Unowned scans are invisible to Web.
+Web provisions local users on Google sign-in and supports POST logout; scan browsing
+remains read-only.
 Keep existing migrations and database schema unchanged during structural refactors.
 Use EF Core migrations; do not use EnsureCreated. Keep connection credentials in environment variables.
 
@@ -51,7 +56,7 @@ Add tests for parsing and non-trivial logic.
 
 ## Console arguments
 
-- Usage: `IsotopeProbe <target> [-templatepath <path>]`.
+- Usage: `IsotopeProbe <target> [-templatepath <path>] [--owner <internal-user-uuid>]`.
 - Accept `-templatepath` before or after the target and pass its value to Nuclei
   using `-t`, while retaining `-u <target> -jsonl -silent`.
 - Keep template selection optional; omit `-t` when no path is supplied.

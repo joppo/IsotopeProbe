@@ -1,0 +1,16 @@
+@page
+@model IsotopeProbe.Web.Pages.Account.IndexModel
+@{ ViewData["Title"] = "Account"; }
+<h1>Your account</h1>
+<dl>
+    <dt>Name</dt><dd>@Model.Profile.DisplayName</dd>
+    <dt>Email</dt><dd>@Model.Profile.Email</dd>
+    <dt>Internal user ID</dt><dd>@Model.Profile.Id</dd>
+    <dt>Created (UTC)</dt><dd>@Model.Profile.CreatedAt.ToString("u")</dd>
+</dl>
+<h2>Groups</h2>
+@if (Model.Memberships.Count == 0) { <p>You have no group memberships.</p> }
+<ul>
+@foreach (var group in Model.Memberships) { <li>@group.Name — @group.Description</li> }
+</ul>
+<p>Local group memberships are managed by an operator. They grant no access to other users’ scans.</p>

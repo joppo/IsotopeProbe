@@ -1,0 +1,6 @@
+@page
+@attribute [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+@{ ViewData["Title"] = "Sign-in failed"; }
+<h1>Sign-in could not be completed</h1>
+<p>Please try again. If the problem persists, ask the operator to check authentication configuration and database availability.</p>
+<a asp-page="/Account/Login">Return to sign in</a>

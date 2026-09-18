@@ -5,7 +5,7 @@ namespace IsotopeProbe.Cli;
 
 internal static class QueryConsole
 {
-    public static async Task<int> RunAsync(QueryOptions options, ScanQueryService queries,
+    public static async Task<int> RunAsync(QueryOptions options, TrustedScanQueryService queries,
         CancellationToken cancellationToken = default)
     {
         switch (options.Command)

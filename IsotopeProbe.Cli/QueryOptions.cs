@@ -6,7 +6,7 @@ namespace IsotopeProbe.Cli;
 public enum QueryCommand { ScansList, ScansShow, FindingsList }
 
 public sealed record QueryOptions(QueryCommand Command, int? ScanId, int Skip = 0,
-    int Take = ScanQueryService.DefaultTake)
+    int Take = TrustedScanQueryService.DefaultTake)
 {
     public static bool IsQuery(string[] args) => args.Length > 0 && args[0] is "scans" or "findings";
 
@@ -20,7 +20,7 @@ public sealed record QueryOptions(QueryCommand Command, int? ScanId, int Skip = 
             if (args.Length != 3)
                 throw new ArgumentException("Usage: scans show <id>.");
             var id = Integer(args[2], "Scan ID");
-            ScanQueryService.ValidateScanId(id);
+            TrustedScanQueryService.ValidateScanId(id);
             return new QueryOptions(QueryCommand.ScansShow, id);
         }
 
@@ -32,7 +32,7 @@ public sealed record QueryOptions(QueryCommand Command, int? ScanId, int Skip = 
         };
         int? scanId = null;
         var skip = 0;
-        var take = ScanQueryService.DefaultTake;
+        var take = TrustedScanQueryService.DefaultTake;
         var seen = new HashSet<string>();
         for (var i = 2; i < args.Length; i += 2)
         {
@@ -53,12 +53,12 @@ public sealed record QueryOptions(QueryCommand Command, int? ScanId, int Skip = 
             }
         }
 
-        ScanQueryService.ValidatePagination(skip, take);
+        TrustedScanQueryService.ValidatePagination(skip, take);
         if (command == QueryCommand.FindingsList)
         {
             if (scanId is null)
                 throw new ArgumentException("findings list requires --scan <id>.");
-            ScanQueryService.ValidateScanId(scanId.Value);
+            TrustedScanQueryService.ValidateScanId(scanId.Value);
         }
         return new QueryOptions(command, scanId, skip, take);
     }

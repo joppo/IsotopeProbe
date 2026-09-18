@@ -55,12 +55,11 @@ before. Historical diagnostic strings are left unchanged by the migration.
   entities; `Persistence/` contains the DbContext and existing migrations.
 - `IsotopeProbe.Web` is an ASP.NET Core Razor Pages host for read-only execution
   and finding browsing. It registers Core’s DbContext and query service per request.
-- `IsotopeProbe.Tests` references CLI and Core to test CLI parsing and Core logic.
+- `IsotopeProbe.Tests` references all three projects to test CLI parsing, Core logic, and the Web authentication pipeline.
 
 The dependencies are CLI → Core and Web → Core. Web does not reference or invoke
 CLI. Existing Core namespaces are retained so the original migration history
-remains intact. Configuration still comes only from
-`ISOTOPEPROBE_CONNECTION_STRING`; no connection strings or secrets are committed.
+remains intact. Database configuration comes from `ISOTOPEPROBE_CONNECTION_STRING`; Google credentials use Web user-secrets or environment variables. No real credentials are committed.
 Nuclei remains an external executable on PATH, with external template files.
 The existing Docker services and their assets are unchanged.
 
@@ -180,7 +179,7 @@ and the total count.
 
 ### Reusing Core queries
 
-`IsotopeProbe.Core/Queries/ScanQueryService.cs` accepts an
+`IsotopeProbe.Core/Queries/TrustedScanQueryService.cs` accepts an
 `IsotopeProbeDbContext` through its constructor, matching the project's existing
 explicit wiring. `QueryModels.cs` contains materialized read models, with no
 console dependencies or tracked entities. All query methods accept cancellation:
@@ -188,7 +187,7 @@ console dependencies or tracked entities. All query methods accept cancellation:
 ```csharp
 using IsotopeProbe.Queries;
 
-var queries = new ScanQueryService(db);
+var queries = new TrustedScanQueryService(db);
 var scans = await queries.ListScansAsync(skip: 0, take: 20, cancellationToken: cancellationToken);
 var scan = await queries.GetScanAsync(id, cancellationToken);
 var findings = await queries.ListFindingsAsync(id, skip: 0, take: 20,
@@ -204,39 +203,170 @@ between reads. `ListFindingsAsync` optionally filters by an exact stored severit
 before counting and paging; omitting it preserves CLI behavior. `GetFindingAsync`
 returns an untracked details DTO, or null for an unknown positive ID. Description
 and extracted results remain in RawJson and are prepared for display by Web.
-No database schema changes are required.
+Web uses `OwnedScanQueryService(db, new ScanUser(internalUserId))`; the host derives this ID exclusively from the validated cookie. It never registers the trusted query service. Both paths share an internal query implementation, with ownership on execution and finding query roots before filtering, counts, summaries, and pagination.
 
-## Browse results locally
+## Google sign-in and local users
 
-After configuring `ISOTOPEPROBE_CONNECTION_STRING` and applying migrations as above,
-run a scan against your local target:
+Web requires Google sign-in by default, including execution and finding URLs.
+ASP.NET Core's maintained Google handler performs the external OAuth flow with
+protected state, correlation cookies and PKCE; its validated user-info identifier
+is mapped to a local UUID. The application uses framework cookie authentication
+without ASP.NET Core Identity's unused password and role tables. See the official
+[Google handler setup](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/social/google-logins?view=aspnetcore-10.0)
+and [cookie authentication guidance](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/cookie?view=aspnetcore-10.0).
+
+New tables:
+
+| Table | Purpose |
+| --- | --- |
+| `users` | UUID key, nullable email/display name, UTC creation time. |
+| `external_logins` | Composite primary key `(Provider, Subject)` and user FK. Google provider is `https://accounts.google.com`. |
+| `groups` | Integer key, name, optional description, unique normalized name. Names are trimmed then uppercased with .NET invariant casing; maximum 100 characters. |
+| `user_groups` | Composite primary key `(UserId, GroupId)` prevents duplicate memberships. |
+
+`scan_executions.OwnerUserId` is nullable and references `users`; deleting an owner
+with scans is restricted. Findings inherit ownership through their execution.
+The new `AddUsersGroupsAndOwnership` migration preserves historical data and old
+migration files. Existing scans remain unowned and invisible to every Web user.
+
+First successful Google sign-in creates a user and external login in one database
+transaction, then issues the session. Concurrent first callbacks converge on the
+unique provider/subject key without orphan users. Subsequent sign-ins reuse that
+identity and update profile data. Email is never used to identify or merge users.
+New users have no groups and see an empty scan list. No approval or invitation is
+required. Google tokens are not saved, and only openid/profile/email scopes are
+requested. The Google OAuth handler validates state/correlation and obtains user
+info directly from Google; it does not use an application-validated ID token or
+an OIDC nonce flow.
+
+### Configure and run Web
+
+1. Create/select a Google Cloud project. In Google Auth Platform, configure
+   Branding/consent details (app name, support email and developer contact).
+2. Set Audience to External for personal Google accounts. While the app is in
+   Testing, add both accounts you intend to test under Test users. An Internal
+   audience restricts sign-in to the configured Google Workspace organization.
+3. Create an OAuth client of type **Web application**. Set its authorized redirect
+   URI to exactly **`https://localhost:7080/signin-google`**. This callback is
+   handled by the authentication middleware, not a Razor Page. Match scheme,
+   hostname, port and path exactly. No browser JavaScript client is used.
+4. Configure the credentials using the project's existing UserSecretsId:
 
 ```bash
-dotnet run --project IsotopeProbe.Cli -- http://localhost:8085 -templatepath "~/Templates/sanity/"
+dotnet user-secrets set 'Authentication:Google:ClientId' '<client-id>' --project IsotopeProbe.Web
+dotnet user-secrets set 'Authentication:Google:ClientSecret' '<client-secret>' --project IsotopeProbe.Web
+dotnet dev-certs https --trust
+# Set ISOTOPEPROBE_CONNECTION_STRING as described above in this terminal.
+dotnet ef database update --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli
 dotnet run --project IsotopeProbe.Web --launch-profile IsotopeProbe.Web
 ```
 
-Open **http://localhost:5080/**. The launch profile binds to localhost. In another
-terminal, export the same connection variable before starting Web. Web does not
-apply migrations at startup; use the explicit EF command in the setup section.
+Open **https://localhost:7080/**. On Linux, install/trust the generated development
+certificate in your browser if `dotnet dev-certs https --trust` requires additional
+platform setup. The launch profile binds HTTPS on localhost and enables Development
+so user-secrets load. Alternatively set `Authentication__Google__ClientId` and
+`Authentication__Google__ClientSecret` environment variables (double underscores).
+Do not put real credentials in repository files. Missing database or Google
+configuration causes startup to fail clearly. Web never applies migrations.
 
-The landing page lists executions newest first, with 20 rows per page. Select an
-execution to see its metadata, whole-execution severity counts, and paginated
-findings. The severity filter is preserved across pages. Select a finding to see
-stored fields, description, and expandable evidence/raw JSON. For example,
-`http://localhost:5080/executions/2` and `http://localhost:5080/findings/5` work when
-those IDs exist. Unknown IDs return HTTP 404; an execution with zero findings
-has its own empty state. All execution times are labeled UTC; scanner timestamps
-retain their stored offset, if supplied.
+Sign in, then open **Your account** (`/Account`) to see your internal UUID, profile,
+and local group memberships. Only login, provider callback and suitable error pages
+are anonymous. Logout is a CSRF-protected POST and clears the local session; Google
+may remain signed in. Finding evidence remains encoded text.
 
-This milestone is **local and read-only, with no authentication**. Keep the host
-bound to localhost. There are no scan-start/cancellation actions, background
-workers, or automatic refresh. Reload to see newly saved results. Running means
-only the last saved state; it does not establish that Nuclei is still alive.
-Browsing invokes Core queries directly and never starts Nuclei or saves records.
-Scanner and target content is rendered as encoded text, including request/response
-bodies and raw JSON. Database failures show a generic setup/connectivity message
-without connection strings or stack traces in the page.
+### Attribute scans and assign historical ownership
+
+**CLI and direct database access are trusted operator interfaces.** They can read
+all data. Supplying an owner is attribution, not authentication of the CLI caller.
+Copy the internal user UUID from that user's account page. Replace example UUIDs
+and execution IDs below with actual records; Google subjects and emails are not
+accepted as internal IDs.
+
+```bash
+# Assign only the explicitly selected unowned scans, atomically.
+dotnet run --project IsotopeProbe.Cli -- scans assign --user <user-uuid> --executions 2 3
+# Explicit ownership for a new scan; validated before Nuclei launches.
+dotnet run --project IsotopeProbe.Cli -- http://localhost:8085 --owner <user-uuid> -templatepath "~/Templates/sanity/"
+# Or set the default owner in the CLI environment; --owner takes precedence.
+export ISOTOPEPROBE_OWNER_USER_ID='<user-uuid>'
+dotnet run --project IsotopeProbe.Cli -- http://localhost:8085 -templatepath "~/Templates/sanity/"
+```
+
+Assignment fails without changing any selected scan if a user/scan is missing or
+any scan is already owned, including by that same user. There is no Web assignment
+operation. Without an option or configured owner, CLI prints that the new scan is
+unowned, CLI-only, and invisible through Web. Nobody automatically receives old
+scans on sign-in.
+
+### Local groups
+
+```bash
+dotnet run --project IsotopeProbe.Cli -- groups create 'Analysts' 'Local analysis team'
+# Use the group ID printed by create:
+dotnet run --project IsotopeProbe.Cli -- groups add --user <user-uuid> --group 1
+dotnet run --project IsotopeProbe.Cli -- groups memberships --user <user-uuid>
+dotnet run --project IsotopeProbe.Cli -- groups remove --user <user-uuid> --group 1
+```
+
+Repeated adds are idempotent and the database prevents duplicate memberships.
+Groups are local memberships, never inferred from Google groups or email domains.
+Authentication identifies the user; ownership controls scan access; group membership
+grants no scan access, even for a group called Administrators. Users can only view
+their memberships on Web. There are no roles, group sharing, public user directory,
+or Web administration pages.
+
+### Browsing and session security
+
+The landing page lists only the owner's executions, newest first, 20 per page.
+Execution pages include owner-scoped severity summaries and paginated findings.
+Severity query-string filters apply before counting and paging. Examples:
+`https://localhost:7080/executions/2` and `https://localhost:7080/findings/5`.
+Other users' resources and unknown IDs both return 404. Ownership is never accepted
+from a URL, form or header. Unowned historical results are also hidden.
+
+Application cookies use the `__Host-IsotopeProbe` name, Secure, HttpOnly, SameSite=Lax,
+a non-sliding eight-hour ticket lifetime, and browser-session persistence. The
+framework's secure SameSite=None correlation cookie is retained for external login.
+Post-login destinations must pass framework local-URL validation. CSRF protection
+applies to login and logout forms. Responses containing application data use
+`Cache-Control: no-store`. Each cookie-authenticated request checks that the local
+user still exists. Logout removes the browser cookie; there is no central session
+revocation store in this milestone, so a previously stolen cookie remains valid
+until expiry or user deletion.
+
+Before public deployment, register an exact production HTTPS callback such as
+`https://probe.example.com/signin-google`, preferably under separate production
+Google credentials. Configure production consent/audience/publishing as Google
+requires, real TLS certificates, secure secret storage and database permissions.
+Behind a reverse proxy, explicitly configure forwarded headers for trusted proxies
+and the original HTTPS scheme before redirection/authentication; do not trust
+arbitrary forwarded headers. Restrict allowed hostnames in deployment configuration.
+
+Persist ASP.NET Core Data Protection keys outside ephemeral deployment storage.
+For a future container deployment, mount a durable, access-restricted key directory
+and configure `AddDataProtection().PersistKeysToFileSystem(...)` with encryption at
+rest (certificate or managed key service). Use the same application name and key
+ring for instances that must accept the same cookies, and separate applications'
+keys. Key loss invalidates sessions and in-progress login state; key disclosure
+allows cookie forgery. No container or deployment assets are added here.
+
+### Manual verification with two Google accounts
+
+1. Complete the setup and migrate explicitly. Use separate browser profiles (or
+   normal/private windows) for accounts A and B, both listed as Google test users.
+2. Sign in as A. Verify an empty list and no groups; copy A's internal UUID. Sign
+   out and back in: the UUID must stay the same.
+3. Sign in as B in the other profile. Verify a different UUID and an empty list.
+4. Assign one existing unowned execution to A and another to B with the CLI
+   commands above, or run new scans with each `--owner`. Keep a third scan unowned.
+5. Verify each account's list/counts, execution details, severity filters and
+   findings contain only its own data. Paste A's execution and finding URLs into
+   B's browser: both must return 404. The unowned scan must be hidden from both.
+6. Create one group, add both UUIDs, and reload each account page. Membership should
+   appear while scan isolation remains unchanged.
+7. Sign out using the button. Revisiting a scan URL must go to login. Try
+   `/Account/Login?returnUrl=https://example.com`: completing sign-in must return
+   to the local home page. Cancel a Google login to check the failure page.
 
 ## Verification
 
@@ -250,9 +380,8 @@ dotnet ef migrations has-pending-model-changes --project IsotopeProbe.Core --sta
 ```
 
 Tests cover argument validation, template selection, JSONL parsing, EF mappings,
-query filtering/pagination, and lifecycle handling. Integration tests use the
-existing PostgreSQL provider and real migrations, without new dependencies.
-Each test creates and then removes its own `query_test_*` or `lifecycle_test_*`
+query filtering/pagination, and lifecycle handling. Integration tests use the existing PostgreSQL provider, real migrations, and the ASP.NET Core MVC test host.
+Each test creates and then removes its own `query_test_*`, `lifecycle_test_*`, or `auth_test_*`
 schema. Set a connection string whose user can create schemas, preferably in a
 local test database:
 
@@ -289,22 +418,17 @@ long local scan to cancel it, then inspect its status and findings. The fake-sca
 automated tests provide deterministic cancellation and forced-termination checks
 when the sanity scan completes too quickly for manual interruption.
 
-Verified for lifecycle handling: all 71 automated tests passed with none skipped,
-using local PostgreSQL and fake scanner processes on Linux. EF reports no pending
-model changes. The tests apply migrations only inside temporary schemas; the main
-database still needs the migration command above. No real Nuclei scan or manual
-Ctrl+C test was run for this milestone. Actual database outages were not induced:
-initial/final write failures were simulated with EF interceptors, while finding
-write failure was exercised through a real PostgreSQL JSON rejection. Process
-cleanup on other operating systems has not been verified.
+Authentication verification includes concurrent first-login provisioning, stable subject
+identity without email merging, owner-scoped SQL queries/counts/pagination/severity
+filters, shared-group isolation, hidden unowned scans, atomic ownership assignment,
+and unique memberships. Web tests run the actual Google/cookie/CSRF middleware
+with controlled Google HTTP responses, including anonymous redirects, correlation
+failure, local return URLs, encoded evidence and logout cookie removal. This is
+**mocked Google authentication**, not a real end-to-end Google login. Follow the
+two-account manual procedure above to verify your own Google client configuration.
 
-Verified for the Web milestone: solution build succeeded with no warnings, and all
-73 tests passed with local PostgreSQL (none skipped). HTTP smoke checks against an
-isolated temporary schema covered execution/finding browsing, pagination, severity
-filtering, empty states, unknown IDs, invalid pagination, HTML-like evidence, and
-safe database-error responses in Development. The Web connection used read-only
-transactions and before/after snapshots confirmed that browsing left all records
-unchanged. No Nuclei process was launched by browsing. Browser tooling was not
-available, so visual layout and interactive browser inspection remain manual checks;
-long text and HTML encoding were checked in rendered HTTP responses. No external
-targets were scanned, and the main database schema was not changed.
+Verified for this authentication milestone: solution build succeeded with no warnings
+or errors; all 85 tests passed against local PostgreSQL with none skipped. EF
+reports no pending model changes. Tests applied migrations only inside disposable
+test schemas; the main application database was not migrated. Google responses
+were mocked and no real Google credentials or live sign-in were exercised.

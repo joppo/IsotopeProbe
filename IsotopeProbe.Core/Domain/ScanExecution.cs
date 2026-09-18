@@ -3,6 +3,8 @@ namespace IsotopeProbe.Domain;
 public sealed class ScanExecution
 {
     public int Id { get; set; }
+    public Guid? OwnerUserId { get; set; }
+    public User? OwnerUser { get; set; }
 
     public string Target { get; set; } = "";
     public DateTimeOffset StartedAt { get; set; }

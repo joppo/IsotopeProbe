@@ -1,9 +1,9 @@
-using IsotopeProbe.Persistence;
+using IsotopeProbe.Domain;
 using Microsoft.EntityFrameworkCore;
 
 namespace IsotopeProbe.Queries;
 
-public sealed class ScanQueryService(IsotopeProbeDbContext db)
+internal sealed class ScanQueryService(IQueryable<ScanExecution> executions, IQueryable<Finding> allFindings)
 {
     public const int DefaultTake = 20;
     public const int MaximumTake = 100;
@@ -12,7 +12,7 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
         int skip = 0, int take = DefaultTake, CancellationToken cancellationToken = default)
     {
         ValidatePagination(skip, take);
-        var scans = db.ScanExecutions.AsNoTracking();
+        var scans = executions;
         var total = await scans.CountAsync(cancellationToken);
         var items = await scans.OrderByDescending(x => x.StartedAt).ThenByDescending(x => x.Id)
             .Skip(skip).Take(take)
@@ -25,7 +25,7 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
     public async Task<ScanDetails?> GetScanAsync(int id, CancellationToken cancellationToken = default)
     {
         ValidateScanId(id);
-        var scan = await db.ScanExecutions.AsNoTracking().Where(x => x.Id == id)
+        var scan = await executions.Where(x => x.Id == id)
             .Select(x => new
             {
                 Execution = new ScanSummary(x.Id, x.Target, x.StartedAt, x.CompletedAt,
@@ -37,7 +37,7 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
         if (scan is null)
             return null;
 
-        var severities = await db.Findings.AsNoTracking().Where(x => x.ScanExecutionId == id)
+        var severities = await allFindings.Where(x => x.ScanExecutionId == id)
             .GroupBy(x => x.Severity).OrderBy(x => x.Key)
             .Select(x => new SeverityCount(x.Key, x.Count()))
             .ToListAsync(cancellationToken);
@@ -50,10 +50,10 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
     {
         ValidateScanId(scanId);
         ValidatePagination(skip, take);
-        if (!await db.ScanExecutions.AsNoTracking().AnyAsync(x => x.Id == scanId, cancellationToken))
+        if (!await executions.AnyAsync(x => x.Id == scanId, cancellationToken))
             return null;
 
-        var findings = db.Findings.AsNoTracking().Where(x => x.ScanExecutionId == scanId);
+        var findings = allFindings.Where(x => x.ScanExecutionId == scanId);
         if (severity is not null)
             findings = findings.Where(x => x.Severity == severity);
         var total = await findings.CountAsync(cancellationToken);
@@ -69,7 +69,7 @@ public sealed class ScanQueryService(IsotopeProbeDbContext db)
     {
         if (id <= 0)
             throw new ArgumentOutOfRangeException(nameof(id), "Finding ID must be a positive integer.");
-        return await db.Findings.AsNoTracking().Where(x => x.Id == id)
+        return await allFindings.Where(x => x.Id == id)
             .Select(x => new FindingDetails(x.Id, x.ScanExecutionId, x.TemplateId, x.Name,
                 x.Severity, x.MatchedAt, x.TemplatePath, x.Authors, x.Tags, x.Type,
                 x.Host, x.Port, x.Scheme, x.Url, x.IpAddress, x.Timestamp, x.MatcherStatus,

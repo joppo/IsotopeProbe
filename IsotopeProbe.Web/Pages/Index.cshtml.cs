@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace IsotopeProbe.Web.Pages;
 
-public sealed class IndexModel(ScanQueryService queries) : PageModel
+public sealed class IndexModel(OwnedScanQueryService queries) : PageModel
 {
     public Page<ScanSummary> Scans { get; private set; } = null!;
     public async Task<IActionResult> OnGetAsync(int skip = 0)

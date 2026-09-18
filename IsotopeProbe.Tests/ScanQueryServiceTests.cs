@@ -17,12 +17,12 @@ public sealed class PostgresFactAttribute : FactAttribute
     }
 }
 
-public sealed class ScanQueryServiceTests : IAsyncLifetime
+public sealed class TrustedScanQueryServiceTests : IAsyncLifetime
 {
     private readonly string _schema = "query_test_" + Guid.NewGuid().ToString("N");
     private NpgsqlConnection? _connection;
     private IsotopeProbeDbContext _db = null!;
-    private ScanQueryService _queries = null!;
+    private TrustedScanQueryService _queries = null!;
 
     public async Task InitializeAsync()
     {
@@ -36,7 +36,7 @@ public sealed class ScanQueryServiceTests : IAsyncLifetime
         var builder = new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = _schema, Pooling = false };
         _db = new IsotopeProbeDbContext(new DbContextOptionsBuilder<IsotopeProbeDbContext>()
             .UseNpgsql(builder.ConnectionString).Options);
-        _queries = new ScanQueryService(_db);
+        _queries = new TrustedScanQueryService(_db);
         try
         {
             await _db.Database.MigrateAsync();

@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace IsotopeProbe.Web.Pages.Findings;
 
-public sealed class DetailsModel(ScanQueryService queries) : PageModel
+public sealed class DetailsModel(OwnedScanQueryService queries) : PageModel
 {
     public FindingDetails Finding { get; private set; } = null!;
     public string? Description { get; private set; }

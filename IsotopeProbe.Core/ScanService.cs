@@ -11,9 +11,11 @@ public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db)
 
     public async Task<ScanExecution> RunAsync(
         string target, string? templatePath = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Guid? ownerUserId = null)
     {
-        var execution = new ScanExecution { Target = target, StartedAt = DateTimeOffset.UtcNow };
+        if (ownerUserId is Guid owner)
+            await new Identity.UserService(db).RequireUserAsync(owner, cancellationToken);
+        var execution = new ScanExecution { Target = target, StartedAt = DateTimeOffset.UtcNow, OwnerUserId = ownerUserId };
         db.ScanExecutions.Add(execution);
         try
         {

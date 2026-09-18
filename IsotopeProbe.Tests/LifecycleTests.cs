@@ -213,7 +213,7 @@ public sealed class LifecycleTests : IAsyncLifetime
     {
         await WaitingScanner();
         using var cli = StartCli();
-        await WaitForFinding();
+        await WaitForFinding(cli);
         using var signal = Process.Start("/bin/kill", $"-INT {cli.Id}")!;
         await signal.WaitForExitAsync();
         await cli.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(25));
@@ -229,7 +229,7 @@ public sealed class LifecycleTests : IAsyncLifetime
     {
         await WaitingScanner();
         using var cli = StartCli();
-        var id = await WaitForFinding();
+        var id = await WaitForFinding(cli);
         cli.Kill(); // Deliberately bypass Ctrl+C cleanup, as a crash would.
         await cli.WaitForExitAsync();
         var saved = await Stored(id);
@@ -321,11 +321,13 @@ public sealed class LifecycleTests : IAsyncLifetime
         return await observer.ScanExecutions.AsNoTracking().Include(x => x.Findings).SingleAsync(x => x.Id == id);
     }
 
-    private async Task<int> WaitForFinding()
+    private async Task<int> WaitForFinding(Process? cli = null)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         while (true)
         {
+            if (cli?.HasExited == true)
+                throw new InvalidOperationException("CLI exited before producing a finding: " + await cli.StandardError.ReadToEndAsync());
             await using var observer = Context();
             var id = await observer.Findings.Select(x => (int?)x.ScanExecutionId).FirstOrDefaultAsync(timeout.Token);
             if (id is not null) return id.Value;
@@ -350,9 +352,18 @@ public sealed class LifecycleTests : IAsyncLifetime
     private Process StartCli(params string[] arguments)
     {
         var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        // The Web test host moves shared Microsoft.Extensions dependencies into the
+        // ASP.NET shared framework. Execute the copied CLI with this test host's
+        // dependency/runtime manifests so those assemblies remain resolvable.
+        start.ArgumentList.Add("exec");
+        start.ArgumentList.Add("--runtimeconfig");
+        start.ArgumentList.Add(Path.ChangeExtension(typeof(LifecycleTests).Assembly.Location, ".runtimeconfig.json"));
+        start.ArgumentList.Add("--depsfile");
+        start.ArgumentList.Add(Path.ChangeExtension(typeof(LifecycleTests).Assembly.Location, ".deps.json"));
         start.ArgumentList.Add(typeof(QueryOptions).Assembly.Location);
         foreach (var argument in arguments.Length == 0 ? ["http://localhost"] : arguments)
             start.ArgumentList.Add(argument);
+        start.Environment.Remove("ISOTOPEPROBE_OWNER_USER_ID");
         start.Environment["ISOTOPEPROBE_CONNECTION_STRING"] = _connectionString;
         start.Environment["PATH"] = _directory + ":" + Environment.GetEnvironmentVariable("PATH");
         return Process.Start(start)!;

@@ -7,7 +7,12 @@
     <link rel="stylesheet" href="~/site.css" />
 </head>
 <body>
-<header><a asp-page="/Index">IsotopeProbe · Scan executions</a><p>Local, read-only results browser</p></header>
+<header><a asp-page="/Index">IsotopeProbe · Scan executions</a><p>Local, read-only results browser</p>@if (User.Identity?.IsAuthenticated == true)
+{
+    <a asp-page="/Account/Index">Your account</a>
+    <form method="post" asp-page="/Account/Logout"><button type="submit">Sign out</button></form>
+}
+</header>
 <main>@RenderBody()</main>
 <footer>Times are UTC unless a scanner timestamp explicitly supplies another offset. Results reflect saved data; reload manually for updates.</footer>
 </body>
