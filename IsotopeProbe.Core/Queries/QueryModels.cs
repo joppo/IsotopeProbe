@@ -6,7 +6,7 @@ public sealed record Page<T>(IReadOnlyList<T> Items, int TotalCount, int Skip, i
 
 public sealed record ScanSummary(
     int Id, string Target, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt,
-    int? ExitCode, int FindingCount, ScanStatus Status, DateTimeOffset? EnqueuedAt = null, string? TemplateProfile = null, int? TargetId = null)
+    int? ExitCode, int FindingCount, ScanStatus Status, DateTimeOffset? EnqueuedAt = null, string? TemplateProfile = null, int? TargetId = null, string? ProfileId = null, string? ProfileVersion = null, string? SnapshotHash = null, int? TemplateCount = null, string? TemplateSourceVersion = null, string? NucleiVersion = null)
 {
     public bool Succeeded => Status == ScanStatus.Succeeded;
 }

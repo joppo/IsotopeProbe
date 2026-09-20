@@ -35,7 +35,7 @@ inputs; nullable TargetId links must have the same owner, enforced in PostgreSQL
 Owned CLI scans, Web admission, and atomic assignment resolve targets through Core.
 Do not add target transfer, URL editing, or deletion flows.
 Web provisions local users on Google sign-in and supports POST logout; scan browsing
-remains read-only. Web submissions accept only server-configured target IDs and a
+remains read-only. Web submissions accept only server-configured target/profile IDs and a
 user-scoped protected idempotency token; never accept owner IDs or scanner arguments.
 Keep queue admission and claiming in Core, hosting in Web. Web concurrency limits
 apply to one worker instance, not direct CLI scans.
@@ -66,7 +66,9 @@ Add tests for parsing and non-trivial logic.
 
 ## Console arguments
 
-- Usage: `IsotopeProbe <target> [-templatepath <path>] [--owner <internal-user-uuid>]`.
+- Usage: `IsotopeProbe <target> [-templatepath <path> | --profile <id>] [--owner <internal-user-uuid>]`.
+- Profile scans use Core prepared immutable snapshots. Prepare with `profiles prepare <id>`;
+  inspect with `profiles inspect <id>`. Retain snapshots and version bindings for all history.
 - Accept `-templatepath` before or after the target and pass its value to Nuclei
   using `-t`, while retaining `-u <target> -jsonl -silent`.
 - Keep template selection optional; omit `-t` when no path is supplied.

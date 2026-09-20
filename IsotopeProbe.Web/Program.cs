@@ -74,6 +74,7 @@ builder.Services.AddSingleton(sp =>
     options.Validate();
     return options;
 });
+builder.Services.AddSingleton(_ => IsotopeProbe.Profiles.ProfileCatalog.FromEnvironment());
 builder.Services.AddSingleton<SubmissionTokens>();
 builder.Services.AddScoped<OwnedScanSubmissionService>();
 builder.Services.AddScoped<NucleiFindingParser>();
@@ -86,6 +87,7 @@ builder.Services.AddHostedService<ScanWorker>();
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(40));
 var app = builder.Build();
 app.Services.GetRequiredService<WebScanOptions>();
+app.Services.GetRequiredService<IsotopeProbe.Profiles.ProfileCatalog>();
 // Validate before accepting requests, after all host configuration sources are applied.
 Required("ISOTOPEPROBE_CONNECTION_STRING");
 Required("Authentication:Google:ClientId");

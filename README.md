@@ -446,8 +446,8 @@ Sign-in → **New scan** → POST → owned PostgreSQL `Queued` execution → im
 redirect to execution details. A single ASP.NET Core `BackgroundService` claims the
 oldest queued Web record and runs Nuclei through Core. Refresh pages manually to see
 status and findings. No scanner runs inside an HTTP request; the CLI is never invoked
-by Web. Users can select only operator-configured target IDs, with one fixed template
-profile. Arbitrary public URL scanning, template uploads, credentials and extra scanner
+by Web. Users can select only operator-configured target IDs, and prepared, enabled template
+profiles. Arbitrary public URL scanning, template uploads, credentials and extra scanner
 arguments are not supported by the UI.
 
 The authenticated internal user ID supplies ownership. A Data Protection token binds
@@ -470,15 +470,13 @@ instance**. It defaults to executing one job at a time. Direct CLI scans bypass 
 ### Configuration and local walkthrough
 
 `IsotopeProbe.Web/appsettings.Development.json` supplies the existing local example:
-`local-sanity` → `http://localhost:8085`, profile `Sanity`, templates
-`~/Templates/sanity/`. Other environments have no allowed targets until configured.
+`local-sanity` → `http://localhost:8085`. Profiles are configured separately in
+`profiles.json`; see versioned-profile setup below. Other environments have no allowed targets until configured.
 All settings are under `WebScans`; environment variables use double underscores:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `Targets` | Empty outside Development | Entries with unique `Id`, `Name`, HTTP(S) `Url` without credentials |
-| `TemplateProfile` | `Sanity` | Display name for the fixed profile |
-| `TemplatePath` | `~/Templates/sanity/` | Fixed templates for every Web scan |
 | `PerUserLimit` | `1` | Queued plus Running Web scans per owner |
 | `QueueLimit` | `20` | Queued Web scans globally |
 | `ConcurrentScans` | `1` | Executing jobs per Web instance, 1–20 |
@@ -486,14 +484,11 @@ All settings are under `WebScans`; environment variables use double underscores:
 | `PollSeconds` | `2` | Worker wait between attempts, 1–60 seconds |
 | `ExecutablePath` | `nuclei` | Executable on Web's PATH or absolute path |
 
-Limits must be positive. Keep `ConcurrentScans=1` for this milestone’s default deployment. The resolved
-URL, absolute template path (including expanded `~/`), profile name and timeout are
-saved at admission. Changing configuration cannot redirect queued jobs to a different
-URL or template path. Template **file contents** and the Nuclei executable are not
-snapshotted: the operator must keep them available and stable while jobs are queued.
-The Web OS account must be able to execute Nuclei and read the templates. It must have
-network access to the configured local target. A missing executable fails the claimed
-job with a diagnostic; it does not stop the queue worker.
+Limits must be positive. Keep `ConcurrentScans=1` for this milestone's default deployment.
+Admission captures the URL, timeout, profile identity/version, selected count and immutable
+snapshot hash. Source changes do not change queued profile scans. Nuclei must remain
+available to the worker; the engine itself is not pinned. A missing executable fails
+the claimed job without stopping the queue worker.
 
 ```bash
 # Set database credentials only in the environment; also configure Google as above.
@@ -502,8 +497,8 @@ export ISOTOPEPROBE_CONNECTION_STRING
 export WebScans__Targets__0__Id='local-sanity'
 export WebScans__Targets__0__Name='Local test target (8085)'
 export WebScans__Targets__0__Url='http://localhost:8085'
-export WebScans__TemplateProfile='Sanity'
-export WebScans__TemplatePath="$HOME/Templates/sanity/"
+export ISOTOPEPROBE_PROFILES="$PWD/profiles.json"
+# Prepare profiles as described below before submitting scans.
 export WebScans__PerUserLimit=1
 export WebScans__QueueLimit=20
 export WebScans__ConcurrentScans=1
@@ -762,7 +757,7 @@ dotnet run --project IsotopeProbe.Web --no-build --launch-profile IsotopeProbe.W
 ```
 
 The previous persistent-target upgrade command is retained above for that milestone;
-use the matcher-name migration command here to upgrade to the current schema.
+use the profile migration command below to upgrade to the current schema.
 
 ### Comparison rules and interpretation
 
@@ -803,10 +798,10 @@ saved comparison result.
 **No longer detected does not mean fixed.** A successful process lifecycle does not
 prove identical coverage or that every check succeeded. The page displays captured
 URL, template path/profile, and timeout side by side, and warns if they differ.
-Execution-level Nuclei version, template version/hash, and non-secret scan-mode/auth
-context identifiers are not recorded by the current model; the page labels them as
-unavailable and always warns that coverage cannot be established. An identical
-mutable template directory path alone cannot prove identical template content.
+New profile executions capture profile identity/version, template snapshot hash and the
+observed Nuclei version. Comparisons warn about changed or missing provenance. Matching
+snapshot hashes and engine versions mean matching recorded content and engine version,
+not guaranteed identical runtime coverage. Legacy/custom scans retain unknown provenance.
 No authentication secrets, request/response bodies, or raw JSON are fetched as
 comparison metadata; evidence stays on the existing authorized finding pages.
 
@@ -876,3 +871,183 @@ The controlled JSONL fixture demonstration passed. EF reported no pending model
 changes and `git diff --check` passed. The working application database was not
 migrated or reset, and no external targets were scanned. Real Google sign-in and the
 manual browser walkthrough remain operator checks; HTTP tests mock Google responses.
+
+## Versioned scan profiles
+
+Core resolves operator configuration into durable snapshots; CLI and Web share the
+resolver and execution checks. There are no profile administration tables or browser
+filesystem inputs. `profiles.json` contains the two initial profiles. Set
+`ISOTOPEPROBE_PROFILES` to its **absolute path** in both hosts (Web uses a different
+working directory). Copy that file for deployment and edit trusted paths before first
+preparation. JSON property names are case-sensitive. IDs must be unique. Each definition
+includes name, description, enabled flag, trusted root, explicit relative files,
+exclusions, source version when known, and `http-get-v1` restrictions. Missing files
+never broaden the selection.
+
+### Initial selections and review
+
+| Profile | Exact template IDs / filenames | Source and rationale |
+| --- | --- | --- |
+| `sanity`, version `1` | `dockercfg-config.yaml`, `git-config.yaml`, `laravel-env.yaml`, `mysql-config-exposure.yaml`, `netrc.yaml` | Existing `~/Templates/sanity/` content, preserved byte-for-byte in `templates/sanity/` for setup reproduction. Validates the local IsotopeProbe test setup, not general vulnerability coverage. Collection version is unknown for these local copies. |
+| `standard-website`, version `1` | `dockercfg-config.yaml`, `git-config.yaml`, `mysql-config-exposure.yaml`, `netrc.yaml` | `http/exposures/configs/` in trusted local `~/nuclei-templates`, reviewed against installed v10.4.9. Recommended when prepared and enabled. |
+
+The standard selection makes six possible GET requests: `/.dockercfg`,
+`/.docker/config.json`, `/.git/config`, `/.my.cnf`, `/.netrc`, and `/_netrc`.
+Review covered methods, paths, payloads, matchers and extractors, not only severity or
+tags. These templates inspect exposed configuration using status, word, regex and
+response-only DSL conditions; Git and netrc include regex extractors. They contain no
+login attempts, writes, exploitation payloads, headless checks, fuzzing, code protocols,
+denial-of-service checks or brute force. Laravel's 22 inline `.env` variants remain in
+sanity but are excluded from the smaller standard selection. This is limited exposure
+coverage, not comprehensive assessment or proof of security. Findings can contain
+exposed secrets, as with existing finding evidence.
+
+The backend deliberately supports a narrow standalone YAML subset: HTTP GET requests
+under BaseURL, inline payload lists, supported matchers and regex extractors. External
+payload files, scripts, workflows, variables, raw requests, dynamic request functions
+and unsupported features/protocols are rejected. Required local assets are rejected
+rather than silently omitted. YamlDotNet is the added dependency for structural parsing.
+Preparation also runs `nuclei -validate` before publication; it does not scan a target.
+
+Nuclei v3.11.1 was checked against its installed help/source and the
+[official CLI documentation](https://github.com/projectdiscovery/nuclei/blob/v3.11.1/README.md).
+Profile execution supplies explicit captured files, disables updates/downloads, OAST
+and redirects, and uses empty configuration in an isolated process HOME/config/cache
+and working directory. Host Nuclei flags, proxy variables and credentials are not
+inherited. Temporary engine configuration is separate from durable template storage.
+Legacy custom-path scans retain their existing process arguments and behavior.
+
+### Setup, preparation and publishing versions
+
+Run from the repository root with .NET 10 and Nuclei on PATH. For a fresh installation,
+obtain the pinned collection explicitly, never from an HTTP request:
+
+```bash
+# Only if this checkout does not already exist; do not overwrite an installed collection.
+git clone --branch v10.4.9 --depth 1 https://github.com/projectdiscovery/nuclei-templates.git "$HOME/nuclei-templates"
+# For a new sanity setup; existing local files are not overwritten.
+mkdir -p "$HOME/Templates/sanity"
+cp -n templates/sanity/*.yaml "$HOME/Templates/sanity/"
+export ISOTOPEPROBE_PROFILES="$PWD/profiles.json"
+dotnet restore IsotopeProbe.slnx
+dotnet build IsotopeProbe.slnx --no-restore
+dotnet tool restore
+dotnet run --project IsotopeProbe.Cli --no-build -- profiles prepare sanity
+dotnet run --project IsotopeProbe.Cli --no-build -- profiles prepare standard-website
+dotnet run --project IsotopeProbe.Cli --no-build -- profiles inspect standard-website
+```
+
+Edit `Root` before preparation if using another checkout location. `SourceVersion` is
+operator-declared collection provenance: verify the tag/commit before setting it. Hashes,
+not that label, establish captured bytes. Review behavior again after collection updates.
+Bundled sanity copies originate from ProjectDiscovery nuclei-templates; see
+`templates/LICENSE.md`.
+
+Preparation prints the manifest, IDs, relative paths, SHA-256 hashes, creation time and
+aggregate hash. Duplicate paths/content are deduplicated; conflicting IDs with different
+bytes, empty selections, missing files, invalid YAML, unsupported dependencies and Nuclei
+validation failures are rejected. `Exclusions` are exact relative filenames. The aggregate
+hash covers the fixed serialized manifest without its creation time: profile identity,
+version, definition hash, source version and sorted file entries.
+
+`StorageDirectory` defaults to `~/.local/share/isotopeprobe/snapshots`. Use durable local
+storage shared by the operator and both hosts, outside Web's public directory. Only
+trusted operators should write snapshots/version bindings; Web needs read access.
+Back up the whole directory alongside PostgreSQL. Do not use an ephemeral container
+layer, temporary filesystem or independently replicated stores. Storage must support
+atomic same-filesystem directory rename and no-overwrite file rename. Symlinks in source
+or snapshot paths are unsupported.
+
+Complete snapshots and ID/version bindings are published atomically. Identical preparation
+reuses the existing snapshot. Conflicting concurrent preparations cannot rebind a version;
+a losing preparation can leave complete unreferenced content, never a partial snapshot.
+There is no automatic cleanup. **Retain every snapshot and version binding** referenced
+by queued or historical executions, including after disabling/removing a profile.
+
+To update content/selection, review it, increment `Version`, update `SourceVersion` when
+known, and run `profiles prepare <id>` before restarting Web with that configuration.
+Never delete bindings to force reuse of an existing version. Preparation reports content
+drift under an unchanged version. Submission uses prepared bytes and does not reread
+mutable sources. Changed configuration under an unchanged version is unavailable.
+`Enabled=false` prevents new submissions without preventing queued work from running.
+Configuration loads at startup; restart Web after edits. Zero-template profiles cannot
+be prepared. An unavailable standard profile is explained on the form; sanity is never
+silently selected instead.
+
+### Schema, deployment and usage
+
+`20260920100615_AddProfileSnapshots` adds nullable `ProfileId`, `ProfileVersion`,
+`SnapshotHash`, `TemplateCount`, `TemplateSourceVersion` and `NucleiVersion` columns.
+Existing `TemplateProfile` captures the display name. Snapshot timestamps and file hashes
+live in durable manifests. Historical values are not inferred or rewritten. Web never
+applies migrations automatically.
+
+Stop Web/worker and CLI writers, back up database and snapshots, prepare the profiles,
+then explicitly migrate with credentials in the environment:
+
+```bash
+read -rsp 'PostgreSQL connection string: ' ISOTOPEPROBE_CONNECTION_STRING
+export ISOTOPEPROBE_CONNECTION_STRING
+dotnet ef database update 20260920100615_AddProfileSnapshots \
+  --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli --no-build
+dotnet ef migrations has-pending-model-changes \
+  --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli --no-build
+dotnet run --project IsotopeProbe.Cli --no-build -- http://localhost:8085 --profile sanity
+dotnet run --project IsotopeProbe.Cli --no-build -- http://localhost:8085 --profile standard-website
+# Append --owner <internal-user-uuid> to make CLI results visible to that owner.
+# Configure Google and allowed targets as above.
+dotnet run --project IsotopeProbe.Web --no-build --launch-profile IsotopeProbe.Web
+```
+
+Existing queued rows with null `SnapshotHash` follow an explicitly legacy execution path
+using their captured `TemplatePath` and timeout. They are **not converted** to profiles.
+Draining before deployment is optional; otherwise preserve their original template
+sources until completion. Their content/engine provenance remains unknown. Recorded
+snapshots that are missing or altered fail, with no legacy-directory fallback. Existing
+recovery instructions still apply to interrupted Running scans.
+
+Web users choose an allowed target and prepared enabled profile; standard is the
+recommended default when available. Version, files, snapshot reference, arguments and
+ownership come from the server. Existing CSRF, idempotency, ownership and admission
+limits remain. CLI `--profile <id>` and `-templatepath <path>` are mutually exclusive.
+Custom paths and omitted template selection remain supported with unavailable profile
+metadata.
+
+Details and CLI `scans show <id>` distinguish **templates selected** from unknown
+**templates loaded/executed** and unknown **checks completed**. Succeeded refers to the
+existing process/persistence lifecycle, not completion of every selected check. The
+engine binary is not pinned; its observed version is recorded at execution. If the
+version query returns no recognizable version, it remains unknown. Comparisons report
+changed IDs/versions, hashes, engines or missing provenance without blocking eligible
+pairs or changing finding categories/identity. Matching recorded template content and
+engine version never guarantee identical runtime coverage.
+
+### Verification commands
+
+Use an account allowed to create/drop disposable schemas. Tests do not reset the working
+schema. Real profile checks are opt-in and scan only `http://localhost:8085`:
+
+```bash
+read -rsp 'Test PostgreSQL connection string: ' ISOTOPEPROBE_TEST_CONNECTION_STRING
+export ISOTOPEPROBE_TEST_CONNECTION_STRING
+dotnet test IsotopeProbe.slnx --no-restore
+# Existing local target and both configured template sources must be available.
+ISOTOPEPROBE_LIVE_PROFILE_TEST=1 dotnet test IsotopeProbe.slnx --no-build \
+  --filter FullyQualifiedName~RealProfilesRunOnlyAgainstExistingLocalTarget
+```
+
+The live test prepares disposable snapshots, tests both CLI orchestration and Web queue
+execution for both profiles, then removes its schema/snapshots. No external targets are
+scanned. HTTP tests mock Google responses; real Google sign-in and a visual browser
+walkthrough remain manual checks.
+
+Verified on 2026-09-20: build succeeded; **144 tests passed, none skipped**, including
+real profile runs with Nuclei v3.11.1. Sanity selected five templates and saved four
+findings; standard selected four and saved three. CLI and Web queue finding counts
+matched for each profile. These counts do not measure completed checks. Fresh and
+populated disposable databases both migrated successfully; the populated check retained
+legacy queued selection and null provenance. The broader suite also verifies preserved
+owners, targets and findings through schema upgrades. EF reported no pending model
+changes, and `git diff --check` passed. Read-only inspection found no Queued or Running
+Web records in the working database; its schema was not migrated. Existing local test
+target edits were left untouched. No external targets were scanned.

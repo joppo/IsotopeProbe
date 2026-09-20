@@ -1,0 +1,40 @@
+{
+  "StorageDirectory": "~/.local/share/isotopeprobe/snapshots",
+  "Profiles": [
+    {
+      "Id": "sanity",
+      "Version": "1",
+      "Name": "Sanity test",
+      "Description": "Validates the IsotopeProbe local test setup; not general vulnerability coverage.",
+      "Enabled": true,
+      "Root": "~/Templates/sanity/",
+      "Files": [
+        "dockercfg-config.yaml",
+        "git-config.yaml",
+        "laravel-env.yaml",
+        "mysql-config-exposure.yaml",
+        "netrc.yaml"
+      ],
+      "Exclusions": [],
+      "SourceVersion": null,
+      "Restrictions": "http-get-v1"
+    },
+    {
+      "Id": "standard-website",
+      "Version": "1",
+      "Name": "Standard website scan",
+      "Description": "Recommended: a modest set of HTTP checks for exposed Git, registry, database and netrc configuration. Coverage is limited.",
+      "Enabled": true,
+      "Root": "~/nuclei-templates",
+      "Files": [
+        "http/exposures/configs/dockercfg-config.yaml",
+        "http/exposures/configs/git-config.yaml",
+        "http/exposures/configs/mysql-config-exposure.yaml",
+        "http/exposures/configs/netrc.yaml"
+      ],
+      "Exclusions": [],
+      "SourceVersion": "v10.4.9",
+      "Restrictions": "http-get-v1"
+    }
+  ]
+}

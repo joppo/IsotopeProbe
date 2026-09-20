@@ -219,9 +219,9 @@ public sealed class AuthenticationTests : IAsyncLifetime
         var nonce = WebUtility.HtmlDecode(Regex.Match(html, "name=\"SubmissionToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value);
         Assert.NotEmpty(nonce);
         var csrf = WebUtility.HtmlDecode(Regex.Match(html, "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value);
-        FormUrlEncodedContent Submission(string target, string token) => new(new Dictionary<string, string>
+        FormUrlEncodedContent Submission(string target, string token, string profile = "standard-website") => new(new Dictionary<string, string>
         {
-            ["__RequestVerificationToken"] = csrf, ["SubmissionToken"] = token, ["TargetId"] = target,
+            ["__RequestVerificationToken"] = csrf, ["SubmissionToken"] = token, ["ProfileId"] = profile, ["TargetId"] = target,
             ["OwnerUserId"] = other.Id.ToString(), ["Target"] = "http://untrusted.invalid",
             ["TemplatePath"] = "/untrusted"
         });
@@ -230,6 +230,12 @@ public sealed class AuthenticationTests : IAsyncLifetime
         Assert.Empty(await db.ScanExecutions.ToListAsync());
         var tampered = await client.PostAsync("/scans/new", Submission("local", nonce + "tampered"));
         Assert.Contains("Invalid submission token", await tampered.Content.ReadAsStringAsync());
+        foreach (var profile in new[] { "disabled", "unknown", "/tmp/templates", "" })
+        {
+            var rejected = await client.PostAsync("/scans/new", Submission("local", nonce, profile));
+            Assert.Equal(HttpStatusCode.OK, rejected.StatusCode);
+            Assert.Empty(await db.ScanExecutions.ToListAsync());
+        }
         var submitted = await client.PostAsync("/scans/new", Submission("local", nonce));
         Assert.Equal(HttpStatusCode.Redirect, submitted.StatusCode);
         var repeat = await client.PostAsync("/scans/new", Submission("local", nonce));
@@ -244,12 +250,13 @@ public sealed class AuthenticationTests : IAsyncLifetime
         Assert.Equal(ScanStatus.Queued, saved.Status);
         Assert.Null(saved.StartedAt);
         Assert.Equal("http://localhost:8085", saved.Target);
-        Assert.DoesNotContain("untrusted", saved.TemplatePath!);
+        Assert.Null(saved.TemplatePath);
+        Assert.NotNull(saved.SnapshotHash);
         Assert.Empty(await db.Findings.ToListAsync());
         Assert.Contains("Queued", await client.GetStringAsync(submitted.Headers.Location));
         var otherId = await new IsotopeProbe.Queue.OwnedScanSubmissionService(db, new(other.Id),
-            new() { Targets = [new() { Id = "local", Name = "Local", Url = "http://localhost:8085" }] })
-            .SubmitAsync("local", Guid.NewGuid());
+            new() { Targets = [new() { Id = "local", Name = "Local", Url = "http://localhost:8085" }] }, TestProfiles.Catalog)
+            .SubmitAsync("local", Guid.NewGuid(), profileId: "standard-website");
         var finding = new Finding { ScanExecutionId = otherId, Name = "private", TemplateId = "test", Severity = "high", MatchedAt = "http://localhost:8085", RawJson = "{}" };
         db.Add(finding);
         await db.SaveChangesAsync();
@@ -286,7 +293,7 @@ public sealed class AuthenticationTests : IAsyncLifetime
             string Field(string name) => WebUtility.HtmlDecode(Regex.Match(html, $"name=\"{name}\"[^>]*value=\"([^\"]+)\"").Groups[1].Value);
             var response = await client.PostAsync("/scans/new", new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["TargetId"] = "local", ["SubmissionToken"] = Field("SubmissionToken"),
+                ["ProfileId"] = "standard-website", ["TargetId"] = "local", ["SubmissionToken"] = Field("SubmissionToken"),
                 ["__RequestVerificationToken"] = Field("__RequestVerificationToken")
             }));
             Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
@@ -432,6 +439,7 @@ public sealed class AuthenticationTests : IAsyncLifetime
             }));
             builder.ConfigureTestServices(services =>
             {
+                services.AddSingleton(TestProfiles.Catalog);
                 var worker = services.Single(x => x.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) &&
                     x.ImplementationType == typeof(IsotopeProbe.Web.Scanning.ScanWorker));
                 if (executable is null) services.Remove(worker); // Isolate HTTP admission tests.

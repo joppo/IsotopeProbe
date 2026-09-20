@@ -7,9 +7,9 @@ using Microsoft.EntityFrameworkCore;
 namespace IsotopeProbe.Queue;
 
 // Returns only the current user's submission ID; no unrestricted read or claim API.
-public sealed class OwnedScanSubmissionService(IsotopeProbeDbContext db, ScanUser user, WebScanOptions options)
+public sealed class OwnedScanSubmissionService(IsotopeProbeDbContext db, ScanUser user, WebScanOptions options, IsotopeProbe.Profiles.ProfileCatalog profiles)
 {
-    public async Task<int> SubmitAsync(string targetId, Guid submissionId, CancellationToken token = default)
+    public async Task<int> SubmitAsync(string targetId, Guid submissionId, CancellationToken token = default, string? profileId = null)
     {
         if (submissionId == Guid.Empty) throw new ArgumentException("Invalid submission token. Open New scan again.");
         options.Validate();
@@ -34,9 +34,9 @@ public sealed class OwnedScanSubmissionService(IsotopeProbeDbContext db, ScanUse
         {
             TargetId = persistentTargetId, Source = ScanSource.Web, Status = ScanStatus.Queued, OwnerUserId = user.Id,
             SubmissionId = submissionId, EnqueuedAt = DateTimeOffset.UtcNow,
-            Target = target.Url, TemplateProfile = options.TemplateProfile,
-            TemplatePath = options.ResolvedTemplatePath(), TimeoutSeconds = options.TimeoutSeconds
+            Target = target.Url, TimeoutSeconds = options.TimeoutSeconds
         };
+        profiles.GetPrepared(profileId ?? "").Capture(execution);
         db.ScanExecutions.Add(execution);
         await db.SaveChangesAsync(token);
         await transaction.CommitAsync(token);

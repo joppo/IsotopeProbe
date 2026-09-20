@@ -31,6 +31,9 @@ internal static class QueryConsole
                     Console.WriteLine("Running is the last persisted state; it does not prove the process is still alive.");
                 if (details.FailureReason is not null)
                     Console.WriteLine($"Failure details: {Clean(details.FailureReason)}");
+                Console.WriteLine($"Profile: {Clean(execution.ProfileId ?? "unavailable")} / {Clean(execution.ProfileVersion ?? "unavailable")}");
+                Console.WriteLine($"Selected templates: {execution.TemplateCount?.ToString() ?? "unknown"}; loaded/executed and completed checks: unknown.");
+                Console.WriteLine($"Nuclei: {Clean(execution.NucleiVersion ?? "unknown")}; snapshot: {execution.SnapshotHash ?? "unavailable"}");
                 Console.WriteLine($"Findings: {execution.FindingCount}");
                 foreach (var severity in details.Severities)
                     Console.WriteLine($"  {Clean(severity.Severity)}: {severity.Count}");

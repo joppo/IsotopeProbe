@@ -40,10 +40,20 @@ public sealed class SubmissionTokenTests
     }
 }
 
-public sealed class WebQueueTests : IAsyncLifetime
+public sealed class WebQueueTests(Xunit.Abstractions.ITestOutputHelper output) : IAsyncLifetime
 {
     private readonly string schema = "queue_test_" + Guid.NewGuid().ToString("N");
     private readonly string directory = Path.Combine(Path.GetTempPath(), "isotope-queue-" + Guid.NewGuid().ToString("N"));
+    private IsotopeProbe.Profiles.ProfileCatalog Catalog()
+    {
+        Directory.CreateDirectory(directory);
+        var template = Path.Combine(directory, "template.yaml");
+        if (!File.Exists(template)) File.WriteAllText(template, ProfileTests.Template);
+        var catalog = new IsotopeProbe.Profiles.ProfileCatalog(new(Path.Combine(directory, "snapshots"),
+            [new("sanity", "1", "Sanity", "Test", true, directory, ["template.yaml"], [], null)]), _ => { });
+        catalog.Prepare("sanity");
+        return catalog;
+    }
     private NpgsqlConnection? admin;
     private string connection = "";
     private IsotopeProbeDbContext Context() => new(new DbContextOptionsBuilder<IsotopeProbeDbContext>().UseNpgsql(connection).Options);
@@ -86,7 +96,7 @@ public sealed class WebQueueTests : IAsyncLifetime
     private async Task<int> Submit(Guid user, Guid nonce, WebScanOptions? options = null, string target = "local")
     {
         await using var db = Context();
-        return await new OwnedScanSubmissionService(db, new(user), options ?? Options()).SubmitAsync(target, nonce);
+        return await new OwnedScanSubmissionService(db, new(user), options ?? Options(), Catalog()).SubmitAsync(target, nonce, profileId: "sanity");
     }
     private async Task<ScanExecution> Stored(int id)
     {
@@ -96,12 +106,12 @@ public sealed class WebQueueTests : IAsyncLifetime
     private async Task<bool> Dispatch(string executable, CancellationToken token = default)
     {
         await using var db = Context();
-        return await new WebScanDispatcher(db, new(new(new(), executable), db)).RunNextAsync(token);
+        return await new WebScanDispatcher(db, new(new(new(), executable), db, Catalog())).RunNextAsync(token);
     }
     private async Task<string> Scanner(string tail)
     {
         var path = Path.Combine(directory, Guid.NewGuid().ToString("N"));
-        await File.WriteAllTextAsync(path, "#!/usr/bin/python3\nimport sys,time,os,subprocess,json\n" +
+        await File.WriteAllTextAsync(path, "#!/usr/bin/python3\nimport sys,time,os,subprocess,json\nif '-version' in sys.argv: print('Nuclei Engine Version: v3.11.1'); sys.exit(0)\n" +
             "print('{\"template-id\":\"queue-test\",\"info\":{\"name\":\"Test\",\"severity\":\"info\"},\"matched-at\":\"http://localhost:8085\"}',flush=True)\n" + tail + "\n");
         if (OperatingSystem.IsLinux()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return path;
@@ -117,7 +127,6 @@ public sealed class WebQueueTests : IAsyncLifetime
         var nonce = Guid.NewGuid();
         var id = await Submit(user, nonce, options);
         options.Targets.Clear();
-        options.TemplatePath = "/changed";
         Assert.Equal(id, await Submit(user, nonce, options));
         var saved = await Stored(id);
         Assert.Equal(ScanStatus.Queued, saved.Status);
@@ -125,7 +134,9 @@ public sealed class WebQueueTests : IAsyncLifetime
         Assert.Null(saved.StartedAt);
         Assert.NotNull(saved.EnqueuedAt);
         Assert.Equal("http://localhost:8085", saved.Target);
-        Assert.EndsWith("Templates/sanity/", saved.TemplatePath);
+        Assert.Null(saved.TemplatePath);
+        Assert.Equal("sanity", saved.ProfileId);
+        Assert.NotNull(saved.SnapshotHash);
         Assert.Equal(2, saved.TimeoutSeconds);
         Assert.Empty(saved.Findings);
     }
@@ -268,9 +279,77 @@ public sealed class WebQueueTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddDbContext<IsotopeProbeDbContext>(o => o.UseNpgsql(connection));
         services.AddScoped(_ => new NucleiRunner(new(), executable));
+        services.AddSingleton(Catalog());
         services.AddScoped<ScanService>();
         services.AddScoped<WebScanDispatcher>();
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
+    }
+
+    [PostgresFact]
+    public async Task QueuedSnapshotSurvivesSourceChangeAndTamperingFailsWithoutLaunching()
+    {
+        var catalog = Catalog();
+        var owner = await User();
+        await using var db = Context();
+        var service = new OwnedScanSubmissionService(db, new(owner), Options(), catalog);
+        await Assert.ThrowsAsync<ArgumentException>(() => service.SubmitAsync("local", Guid.NewGuid(), profileId: "disabled"));
+        var id = await service.SubmitAsync("local", Guid.NewGuid(), profileId: "sanity");
+        File.WriteAllText(Path.Combine(directory, "template.yaml"), "source changed after enqueue");
+        var stored = await db.ScanExecutions.SingleAsync(x => x.Id == id);
+        var files = catalog.Verify(stored.SnapshotHash!, stored.ProfileId, stored.ProfileVersion);
+        Assert.Equal(ProfileTests.Template, File.ReadAllText(files[0]));
+        File.AppendAllText(files[0], "tampered");
+        var marker = Path.Combine(directory, "launched");
+        await new WebScanDispatcher(db, new(new(new(), await Scanner($"open({JsonSerializer.Serialize(marker)},'w').write('launched')")), db, catalog)).RunNextAsync(default);
+        var result = await Stored(id);
+        Assert.Equal(ScanStatus.Failed, result.Status);
+        Assert.Contains("no fallback", result.FailureReason);
+        Assert.False(File.Exists(marker));
+    }
+
+    [LifecycleFact]
+    public async Task LegacyQueuedWorkRetainsOriginalPathAndUnknownProvenance()
+    {
+        await using var db = Context();
+        var legacy = new ScanExecution
+        {
+            Source = ScanSource.Web, Status = ScanStatus.Queued, EnqueuedAt = DateTimeOffset.UtcNow,
+            OwnerUserId = await User(), Target = "http://localhost:8085", TemplatePath = "/original templates",
+            TemplateProfile = "Legacy sanity", TimeoutSeconds = 10
+        };
+        db.Add(legacy); await db.SaveChangesAsync();
+        await Dispatch(await Scanner("assert sys.argv[sys.argv.index('-t')+1] == '/original templates'"));
+        var saved = await Stored(legacy.Id);
+        Assert.Equal(ScanStatus.Succeeded, saved.Status);
+        Assert.Equal("/original templates", saved.TemplatePath);
+        Assert.Null(saved.ProfileId); Assert.Null(saved.SnapshotHash); Assert.Null(saved.NucleiVersion);
+    }
+
+    [LocalProfileFact]
+    public async Task RealProfilesRunOnlyAgainstExistingLocalTarget()
+    {
+        var configuration = JsonSerializer.Deserialize<IsotopeProbe.Profiles.ProfileConfiguration>(File.ReadAllText(
+            Path.GetFullPath("../../../../profiles.json", AppContext.BaseDirectory)))!;
+        var catalog = new IsotopeProbe.Profiles.ProfileCatalog(configuration with { StorageDirectory = Path.Combine(directory, "live-snapshots") });
+        await using var db = Context();
+        var owner = await User();
+        foreach (var profile in configuration.Profiles)
+        {
+            var prepared = catalog.Prepare(profile.Id);
+            var scans = new ScanService(new(new()), db, catalog);
+            var cli = await scans.RunAsync("http://localhost:8085", ownerUserId: owner, profileId: profile.Id);
+            Assert.Equal(ScanStatus.Succeeded, cli.Status);
+            Assert.Equal("v3.11.1", cli.NucleiVersion);
+            Assert.Equal(prepared.Hash, cli.SnapshotHash);
+            var id = await new OwnedScanSubmissionService(db, new(owner), Options(), catalog)
+                .SubmitAsync("local", Guid.NewGuid(), profileId: profile.Id);
+            await new WebScanDispatcher(db, scans).RunNextAsync(default);
+            var web = await Stored(id);
+            Assert.Equal(ScanStatus.Succeeded, web.Status);
+            Assert.Equal(prepared.Hash, web.SnapshotHash);
+            Assert.Equal(cli.Findings.Count, web.Findings.Count);
+            output.WriteLine($"{profile.Id}: selected={web.TemplateCount}, CLI findings={cli.Findings.Count}, Web findings={web.Findings.Count}, engine={web.NucleiVersion}");
+        }
     }
 
     [PostgresFact]
@@ -290,5 +369,15 @@ public sealed class WebQueueTests : IAsyncLifetime
         Assert.Equal(ScanStatus.Failed, (await Stored(id)).Status);
         Assert.Equal(ScanStatus.Running, (await Stored(cli.Id)).Status);
         await Assert.ThrowsAsync<ArgumentException>(() => recovery.MarkInterruptedFailedAsync(id));
+    }
+}
+
+public sealed class LocalProfileFactAttribute : FactAttribute
+{
+    public LocalProfileFactAttribute()
+    {
+        if (Environment.GetEnvironmentVariable("ISOTOPEPROBE_LIVE_PROFILE_TEST") != "1" ||
+            string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ISOTOPEPROBE_TEST_CONNECTION_STRING")))
+            Skip = "Requires explicit local Nuclei/localhost:8085 verification and disposable PostgreSQL schema access.";
     }
 }

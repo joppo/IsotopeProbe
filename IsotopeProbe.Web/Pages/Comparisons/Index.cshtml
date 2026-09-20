@@ -22,13 +22,18 @@ else {
 @if (Model.Comparison is null && Model.Error is null) { <p>No previous successful scan could be selected. Choose an available baseline above.</p> }
 @if (Model.Comparison is { } comparison) {
 <p><a asp-page="/Targets/Details" asp-route-id="@comparison.Newer.TargetId">Target @comparison.Newer.TargetId history</a></p>
+<details><summary>Recorded provenance</summary>
+@foreach (var scan in new[] { comparison.Older, comparison.Newer }) {
+<p>Execution @scan.Id: @(scan.ProfileId ?? "Unknown profile") / @(scan.ProfileVersion ?? "Unknown version"); Nuclei @(scan.NucleiVersion ?? "unknown"); snapshot @(scan.SnapshotHash ?? "unknown").</p>
+}
+</details>
 <h2>Recorded scan coverage</h2>
 <div class="table-scroll"><table>
 <thead><tr><th>Recorded input</th><th>Older / baseline <a asp-page="/Executions/Details" asp-route-id="@comparison.Older.Id">@comparison.Older.Id</a></th><th>Newer <a asp-page="/Executions/Details" asp-route-id="@comparison.Newer.Id">@comparison.Newer.Id</a></th></tr></thead>
 <tbody>
 <tr><th>Started (UTC)</th><td>@Display.Utc(comparison.Older.StartedAt)</td><td>@Display.Utc(comparison.Newer.StartedAt)</td></tr>
 <tr><th>Captured target URL</th><td>@comparison.Older.Url</td><td>@comparison.Newer.Url</td></tr>
-<tr><th>Template selection</th><td>@(comparison.Older.TemplatePath ?? "Not recorded / scanner default")</td><td>@(comparison.Newer.TemplatePath ?? "Not recorded / scanner default")</td></tr>
+<tr><th>Template selection</th><td>@(comparison.Older.SnapshotHash is not null ? "Captured immutable snapshot" : comparison.Older.TemplatePath ?? "Not recorded / scanner default")</td><td>@(comparison.Newer.SnapshotHash is not null ? "Captured immutable snapshot" : comparison.Newer.TemplatePath ?? "Not recorded / scanner default")</td></tr>
 <tr><th>Template profile</th><td>@(comparison.Older.TemplateProfile ?? "Not recorded")</td><td>@(comparison.Newer.TemplateProfile ?? "Not recorded")</td></tr>
 <tr><th>Timeout (seconds)</th><td>@(comparison.Older.TimeoutSeconds?.ToString() ?? "Not recorded")</td><td>@(comparison.Newer.TimeoutSeconds?.ToString() ?? "Not recorded")</td></tr>
 <tr><th>Nuclei version</th><td>Not recorded</td><td>Not recorded</td></tr>

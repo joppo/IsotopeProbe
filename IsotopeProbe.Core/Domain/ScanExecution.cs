@@ -12,6 +12,12 @@ public sealed class ScanExecution
     public Guid? SubmissionId { get; set; }
     public string? TemplatePath { get; set; }
     public string? TemplateProfile { get; set; }
+    public string? ProfileId { get; set; }
+    public string? ProfileVersion { get; set; }
+    public string? SnapshotHash { get; set; }
+    public int? TemplateCount { get; set; }
+    public string? TemplateSourceVersion { get; set; }
+    public string? NucleiVersion { get; set; }
     public int? TimeoutSeconds { get; set; }
 
     public string Target { get; set; } = "";

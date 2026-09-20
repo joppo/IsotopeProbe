@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 namespace IsotopeProbe.Comparisons;
 
 public sealed record ComparisonExecution(int Id, int? TargetId, string Url, DateTimeOffset? StartedAt,
-    DateTimeOffset? CompletedAt, ScanStatus Status, string? TemplatePath, string? TemplateProfile, int? TimeoutSeconds);
+    DateTimeOffset? CompletedAt, ScanStatus Status, string? TemplatePath, string? TemplateProfile, int? TimeoutSeconds, string? ProfileId = null, string? ProfileVersion = null, string? SnapshotHash = null, string? NucleiVersion = null);
 public sealed record ComparisonPage(ComparisonExecution Older, ComparisonExecution Newer, ComparisonCounts Counts,
     IReadOnlyList<string> Warnings, ComparisonCategory Category, Page<ComparisonItem> Items);
 public sealed record ComparisonEvidence(ComparisonExecution Older, ComparisonExecution Newer, bool Baseline,
@@ -19,7 +19,7 @@ public sealed class OwnedScanComparisonService(IsotopeProbeDbContext db, ScanUse
     private IQueryable<ScanExecution> Owned => db.ScanExecutions.AsNoTracking().Where(x => x.OwnerUserId == user.Id);
     private static IQueryable<ComparisonExecution> Project(IQueryable<ScanExecution> scans) => scans.Select(x =>
         new ComparisonExecution(x.Id, x.TargetId, x.Target, x.StartedAt, x.CompletedAt, x.Status,
-            x.TemplatePath, x.TemplateProfile, x.TimeoutSeconds));
+            x.TemplatePath, x.TemplateProfile, x.TimeoutSeconds, x.ProfileId, x.ProfileVersion, x.SnapshotHash, x.NucleiVersion));
     private Task<ComparisonExecution?> Get(int id, CancellationToken token) => Project(Owned.Where(x => x.Id == id)).SingleOrDefaultAsync(token);
     private static void RequireSuccessful(ComparisonExecution scan)
     {
@@ -80,7 +80,7 @@ public sealed class OwnedScanComparisonService(IsotopeProbeDbContext db, ScanUse
         var result = FindingComparison.Compare(await Findings(olderId, token), await Findings(newerId, token), token);
         var warnings = new List<string>
         {
-            "Coverage cannot be established: Nuclei version, template version/hash, and scan-mode/authentication-context identifiers were not recorded. Matching template paths do not prove identical template contents.",
+            ProvenanceWarning(older, newer),
             "Successful status does not prove identical coverage or that every check succeeded. These are differences in detected findings; no longer detected does not mean fixed."
         };
         if (older.Url != newer.Url || older.TemplatePath != newer.TemplatePath || older.TemplateProfile != newer.TemplateProfile || older.TimeoutSeconds != newer.TimeoutSeconds)
@@ -92,6 +92,18 @@ public sealed class OwnedScanComparisonService(IsotopeProbeDbContext db, ScanUse
             warnings.Add($"Matcher-name availability differs at {result.Counts.MatcherAvailabilityWarnings} template/location pair(s). New/no-longer-detected items may reflect missing historical metadata rather than a changed security condition.");
         var items = result.Categories[category];
         return new(older, newer, result.Counts, warnings, category, new(items.Skip(skip).Take(take).ToList(), items.Count, skip, take));
+    }
+    public static string ProvenanceWarning(ComparisonExecution older, ComparisonExecution newer)
+    {
+        var differences = new List<string>();
+        if (older.ProfileId is null || newer.ProfileId is null || older.ProfileVersion is null || newer.ProfileVersion is null ||
+            older.SnapshotHash is null || newer.SnapshotHash is null || older.NucleiVersion is null || newer.NucleiVersion is null)
+            differences.Add("Coverage cannot be established: provenance is unknown or incomplete for at least one execution; matching names or paths do not establish coverage.");
+        if (older.ProfileId != newer.ProfileId || older.ProfileVersion != newer.ProfileVersion) differences.Add("Profile IDs or versions differ.");
+        if (older.SnapshotHash != newer.SnapshotHash) differences.Add("Template snapshot hashes differ.");
+        if (older.NucleiVersion != newer.NucleiVersion) differences.Add("Nuclei versions differ.");
+        return differences.Count == 0 ? "Matching recorded template content and engine version; identical runtime coverage is not guaranteed."
+            : string.Join(" ", differences);
     }
     public async Task<ComparisonEvidence?> EvidenceAsync(int olderId, int newerId, bool baseline, int representativeId,
         int skip = 0, int take = 20, CancellationToken token = default)

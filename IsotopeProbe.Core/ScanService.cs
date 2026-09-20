@@ -5,13 +5,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace IsotopeProbe;
 
-public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db)
+public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db, Profiles.ProfileCatalog? profiles = null)
 {
     private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(10);
 
     public async Task<ScanExecution> RunAsync(
         string target, string? templatePath = null,
-        CancellationToken cancellationToken = default, Guid? ownerUserId = null)
+        CancellationToken cancellationToken = default, Guid? ownerUserId = null, string? profileId = null)
     {
         if (ownerUserId is Guid owner)
             await new Identity.UserService(db).RequireUserAsync(owner, cancellationToken);
@@ -19,6 +19,11 @@ public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db)
             ? await new Targets.TargetResolver(db).ResolveAsync(targetOwner, target, token: cancellationToken)
             : null;
         var execution = new ScanExecution { TargetId = targetId, Target = target, StartedAt = DateTimeOffset.UtcNow, OwnerUserId = ownerUserId, TemplatePath = templatePath };
+        if (profileId is not null)
+        {
+            if (templatePath is not null) throw new ArgumentException("Profile and template path cannot be combined.");
+            (profiles ?? throw new ArgumentException("Profile catalog is required.")).GetPrepared(profileId).Capture(execution);
+        }
         db.ScanExecutions.Add(execution);
         try
         {
@@ -38,21 +43,33 @@ public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db)
         CancellationToken cancellationToken, Func<(ScanStatus Status, string Reason)?>? cancellationOutcome = null)
     {
         NucleiRunResult result;
+        var verifyingSnapshot = false;
         try
         {
+            string[]? templateFiles = null;
+            if (execution.ProfileId is not null || execution.SnapshotHash is not null)
+            {
+                verifyingSnapshot = true;
+                if (execution.SnapshotHash is null) throw new ArgumentException("Recorded profile snapshot reference is missing.");
+                templateFiles = (profiles ?? throw new ArgumentException("Snapshot storage is not configured.")).Verify(
+                    execution.SnapshotHash, execution.ProfileId, execution.ProfileVersion);
+                verifyingSnapshot = false;
+                execution.NucleiVersion = await runner.GetVersionAsync(cancellationToken);
+            }
             result = await runner.RunAsync(execution.Target, execution.TemplatePath, async finding =>
             {
                 finding.ScanExecutionId = execution.Id;
                 db.Findings.Add(finding);
                 using var findingWrite = new CancellationTokenSource(WriteTimeout);
                 await db.SaveChangesAsync(findingWrite.Token);
-            }, cancellationToken);
+            }, cancellationToken, templateFiles);
         }
         catch (Exception exception)
         {
             // Also handles setup errors before the runner enters its process loop.
             result = new NucleiRunResult(null, "",
-                $"Scanner setup failed ({exception.GetType().Name}).", false);
+                verifyingSnapshot ? "Template snapshot verification failed: content or reference is missing, altered or unavailable; no fallback was used."
+                    : $"Scanner setup failed ({exception.GetType().Name}).", cancellationToken.IsCancellationRequested);
         }
 
         // This is the terminal decision point. Cancellation during the final write
@@ -83,6 +100,7 @@ public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db)
             var updated = await db.ScanExecutions
                 .Where(x => x.Id == execution.Id && x.Status == ScanStatus.Running)
                 .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.NucleiVersion, execution.NucleiVersion)
                     .SetProperty(x => x.Status, status)
                     .SetProperty(x => x.CompletedAt, completedAt)
                     .SetProperty(x => x.ExitCode, result.ExitCode)

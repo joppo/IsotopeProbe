@@ -3,8 +3,6 @@ namespace IsotopeProbe.Queue;
 public sealed class WebScanOptions
 {
     public List<AllowedScanTarget> Targets { get; set; } = [];
-    public string TemplateProfile { get; set; } = "Sanity";
-    public string TemplatePath { get; set; } = "~/Templates/sanity/";
     public int PerUserLimit { get; set; } = 1;
     public int ConcurrentScans { get; set; } = 1;
     public int QueueLimit { get; set; } = 20;
@@ -15,7 +13,6 @@ public sealed class WebScanOptions
     public void Validate()
     {
         if (PerUserLimit < 1 || QueueLimit < 1 || ConcurrentScans is < 1 or > 20 || TimeoutSeconds is < 1 or > 86400 || PollSeconds is < 1 or > 60 ||
-            string.IsNullOrWhiteSpace(TemplateProfile) || string.IsNullOrWhiteSpace(TemplatePath) ||
             string.IsNullOrWhiteSpace(ExecutablePath))
             throw new ArgumentException("Invalid WebScans profile, limits, executable, timeout or poll interval.");
         if (Targets.Select(x => x.Id).Distinct(StringComparer.Ordinal).Count() != Targets.Count ||
@@ -25,10 +22,7 @@ public sealed class WebScanOptions
             throw new ArgumentException("WebScans targets require unique IDs, names and HTTP(S) URLs without credentials.");
     }
 
-    public string ResolvedTemplatePath() => Path.GetFullPath(
-        TemplatePath == "~" || TemplatePath.StartsWith("~/", StringComparison.Ordinal)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), TemplatePath.Length == 1 ? "" : TemplatePath[2..])
-            : TemplatePath);
+
 }
 
 public sealed class AllowedScanTarget

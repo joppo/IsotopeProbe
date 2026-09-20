@@ -171,20 +171,21 @@ public sealed class TargetTests : IAsyncLifetime
         var owner = await Ready();
         var target = await Resolve(owner, "http://localhost:8085");
         await using var db = Context();
-        var options = new WebScanOptions { Targets = [new() { Id = "allowed", Name = "Sanity", Url = "http://localhost:8085" }], TemplatePath = "/captured/templates", TimeoutSeconds = 35 };
-        var service = new OwnedScanSubmissionService(db, new(owner), options);
+        var options = new WebScanOptions { Targets = [new() { Id = "allowed", Name = "Sanity", Url = "http://localhost:8085" }], TimeoutSeconds = 35 };
+        var service = new OwnedScanSubmissionService(db, new(owner), options, TestProfiles.Catalog);
         await Assert.ThrowsAsync<ArgumentException>(() => service.SubmitAsync(target.ToString()!, Guid.NewGuid()));
         await Assert.ThrowsAsync<ArgumentException>(() => service.SubmitAsync("http://localhost:8085", Guid.NewGuid()));
         var nonce = Guid.NewGuid();
-        var id = await service.SubmitAsync("allowed", nonce);
-        Assert.Equal(id, await service.SubmitAsync("allowed", nonce));
-        options.Targets.Clear(); options.TemplatePath = "/changed"; options.TimeoutSeconds = 1;
+        var id = await service.SubmitAsync("allowed", nonce, profileId: "standard-website");
+        Assert.Equal(id, await service.SubmitAsync("allowed", nonce, profileId: "standard-website"));
+        options.Targets.Clear(); options.TimeoutSeconds = 1;
         await new WebScanDispatcher(db, new(new(new(), "/tmp/isotopeprobe-missing-" + Guid.NewGuid()), db)).RunNextAsync(default);
         var saved = await db.ScanExecutions.SingleAsync(x => x.Id == id);
         Assert.Equal(target, saved.TargetId);
         Assert.Equal(owner, saved.OwnerUserId);
         Assert.Equal("http://localhost:8085", saved.Target);
-        Assert.Equal("/captured/templates", saved.TemplatePath);
+        Assert.Null(saved.TemplatePath);
+        Assert.NotNull(saved.SnapshotHash);
         Assert.Equal(35, saved.TimeoutSeconds);
         Assert.Equal(ScanStatus.Failed, saved.Status);
         await Assert.ThrowsAsync<ArgumentException>(() => service.SubmitAsync("allowed", Guid.NewGuid()));
@@ -256,7 +257,7 @@ public sealed class TargetTests : IAsyncLifetime
             VALUES (1, 1, 'test', 'Test', 'high', 'http://localhost:8085', ARRAY[]::text[], ARRAY[]::text[], jsonb_build_object('saved', true));
             """);
         async Task<string> Evidence() => await db.Database.SqlQueryRaw<string>("""
-            SELECT jsonb_build_object('scans', (SELECT jsonb_agg(to_jsonb(e) - 'TargetId' ORDER BY "Id") FROM scan_executions e),
+            SELECT jsonb_build_object('scans', (SELECT jsonb_agg(to_jsonb(e) - 'TargetId' - 'ProfileId' - 'ProfileVersion' - 'SnapshotHash' - 'TemplateCount' - 'TemplateSourceVersion' - 'NucleiVersion' ORDER BY "Id") FROM scan_executions e),
                 'findings', (SELECT jsonb_agg(to_jsonb(f) - 'MatcherName' ORDER BY "Id") FROM findings f),
                 'users', (SELECT jsonb_agg(to_jsonb(u) ORDER BY "Id") FROM users u))::text AS "Value"
             """).SingleAsync();
@@ -268,6 +269,7 @@ public sealed class TargetTests : IAsyncLifetime
         Assert.Equal(3, targets.Count);
         Assert.All(targets, t => { Assert.Equal(t.Url, t.Name); Assert.InRange(t.CreatedAtUtc, started, DateTimeOffset.UtcNow); });
         var scans = await db.ScanExecutions.OrderBy(x => x.Id).ToListAsync();
+        Assert.All(scans, scan => { Assert.Null(scan.ProfileId); Assert.Null(scan.SnapshotHash); Assert.Null(scan.NucleiVersion); });
         Assert.NotNull(scans[0].TargetId);
         Assert.Equal(scans[0].TargetId, scans[1].TargetId);
         Assert.NotEqual(scans[0].TargetId, scans[2].TargetId);

@@ -1,3 +1,4 @@
+using IsotopeProbe.Profiles;
 using IsotopeProbe;
 using IsotopeProbe.Nuclei;
 using IsotopeProbe.Cli;
@@ -8,6 +9,15 @@ ScanOptions? options = null;
 QueryOptions? queryOptions = null;
 try
 {
+    if (args.FirstOrDefault() == "profiles")
+    {
+        if (args.Length != 3 || args[1] is not ("prepare" or "inspect"))
+            throw new ArgumentException("Use profiles prepare|inspect <id>.");
+        var catalog = ProfileCatalog.FromEnvironment();
+        var prepared = args[1] == "prepare" ? catalog.Prepare(args[2]) : catalog.GetPrepared(args[2]);
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(prepared, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        return 0;
+    }
     if (OperatorConsole.IsOperation(args))
         OperatorConsole.Validate(args);
     else if (QueryOptions.IsQuery(args))
@@ -15,10 +25,11 @@ try
     else
         options = ScanOptions.Parse(args);
 }
-catch (ArgumentException exception)
+catch (Exception exception) when (exception is ArgumentException or IOException or System.Text.Json.JsonException)
 {
     Console.Error.WriteLine(exception.Message);
-    Console.Error.WriteLine("Usage: IsotopeProbe <target> [-templatepath <path>] [--owner <user-uuid>]");
+    Console.Error.WriteLine("Usage: IsotopeProbe <target> [-templatepath <path> | --profile <id>] [--owner <user-uuid>]");
+    Console.Error.WriteLine("       IsotopeProbe profiles prepare|inspect <id>");
     Console.Error.WriteLine("       IsotopeProbe scans list [--skip <n>] [--take <n>]");
     Console.Error.WriteLine("       IsotopeProbe scans show <id>");
     Console.Error.WriteLine("       IsotopeProbe findings list --scan <id> [--skip <n>] [--take <n>]");
@@ -57,9 +68,11 @@ try
     if (owner is null)
         Console.WriteLine("No owner configured: this scan will be unowned, CLI-only, and invisible to all Web users.");
     var runner = new NucleiRunner(new NucleiFindingParser());
-    var scanService = new ScanService(runner, db);
-    var execution = await scanService.RunAsync(options!.Target, options.TemplatePath, cancellation.Token, owner);
+    var scanService = new ScanService(runner, db, options.ProfileId is null ? null : ProfileCatalog.FromEnvironment());
+    var execution = await scanService.RunAsync(options!.Target, options.TemplatePath, cancellation.Token, owner, options.ProfileId);
     Console.WriteLine($"Saved scan execution {execution.Id}.");
+    Console.WriteLine($"Profile: {execution.ProfileId ?? "unavailable (custom selection)"} / {execution.ProfileVersion ?? "unavailable"}; selected templates: {execution.TemplateCount?.ToString() ?? "unknown"}.");
+    Console.WriteLine("Loaded/executed templates and checks completed: unknown. Success does not establish complete coverage.");
 
     foreach (var finding in execution.Findings)
     {

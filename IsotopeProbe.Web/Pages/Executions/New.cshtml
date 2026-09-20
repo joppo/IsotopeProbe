@@ -2,7 +2,13 @@
 @model IsotopeProbe.Web.Pages.Executions.NewModel
 @{ ViewData["Title"] = "New scan"; }
 <h1>New scan</h1>
-<p>Template profile: <strong>@Model.Profile</strong></p>
+@if (!Model.Profiles.Any(x => x.Id == "standard-website")) { <p>Standard website scan is unavailable: the operator has not configured it.</p> }
+@foreach (var profile in Model.Profiles) {
+<p><strong>@profile.Name</strong>: @profile.Description
+@if (profile.Error is not null) { <span>Unavailable: @profile.Error</span> }
+else { <span>@profile.Count templates selected.</span> }
+</p>
+}
 <p>Choose an operator-configured target. Results appear in your execution list; refresh manually for updates.</p>
 <div asp-validation-summary="All" role="alert"></div>
 @if (Model.Targets.Count == 0) { <p>No targets are configured. Contact the local operator.</p> }
@@ -13,6 +19,11 @@ else {
     <select asp-for="TargetId" required>
         <option value="">Choose a target</option>
         @foreach (var target in Model.Targets) { <option value="@target.Id">@target.Name</option> }
+    </select>
+    <label asp-for="ProfileId">Scan profile</label>
+    <select asp-for="ProfileId" required>
+        <option value="">Choose a profile</option>
+        @foreach (var profile in Model.Profiles.Where(x => x.Error is null)) { <option value="@profile.Id">@profile.Name (@profile.Count templates)</option> }
     </select>
     <button type="submit">Queue scan</button>
 </form>

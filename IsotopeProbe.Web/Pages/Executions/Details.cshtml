@@ -10,11 +10,16 @@ else { <p>This legacy execution has no linked target.</p> }
 <dt>Persisted status</dt><dd><span class="badge @Display.Tone(scan.Status.ToString())">@scan.Status</span></dd>
 <dt>Enqueued (UTC)</dt><dd>@Display.Utc(scan.EnqueuedAt)</dd>
 <dt>Template profile</dt><dd>@(scan.TemplateProfile ?? "CLI selection")</dd>
+<dt>Profile ID / version</dt><dd>@(scan.ProfileId ?? "Unavailable (legacy/custom selection)") / @(scan.ProfileVersion ?? "Unavailable")</dd>
+<dt>Templates selected</dt><dd>@(scan.TemplateCount?.ToString() ?? "Unknown")</dd>
+<dt>Actual Nuclei version</dt><dd>@(scan.NucleiVersion ?? "Unknown")</dd>
 <dt>Started (UTC)</dt><dd>@(scan.StartedAt is null ? "Not started" : Display.Utc(scan.StartedAt))</dd>
 <dt>Completed (UTC)</dt><dd>@Display.Utc(scan.CompletedAt)</dd>
 <dt>Exit code</dt><dd>@(scan.ExitCode?.ToString() ?? "Unavailable")</dd>
 <dt>Failure details</dt><dd class="evidence">@(Model.Scan.FailureReason ?? "None recorded")</dd>
 </dl>
+<p>Templates loaded/executed and checks completed: unknown. Successful status does not prove every selected check completed or that the site is secure.</p>
+<details><summary>Template provenance</summary><p>Snapshot SHA-256: @(scan.SnapshotHash ?? "Unavailable")</p><p>Source version: @(scan.TemplateSourceVersion ?? "Unknown")</p></details>
 <p>Running is the last persisted state, not proof that a scanner process is alive.</p>
 @if (!string.IsNullOrEmpty(Model.Scan.StandardError)) { <details><summary>Stored stderr diagnostic</summary><pre>@Model.Scan.StandardError</pre></details> }
 @if (scan.Succeeded) {
