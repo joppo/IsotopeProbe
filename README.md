@@ -1,6 +1,6 @@
 # IsotopeProbe
 
-A .NET 10 application that runs Nuclei through a CLI, persists execution lifecycle
+A .NET 10 application that runs Nuclei through a CLI or an owned Web scan queue, persists execution lifecycle
 state and findings in PostgreSQL, and browses saved results through CLI queries
 or a local Razor Pages website. Findings are saved one at a
 time as JSONL arrives, so later failure or cancellation does not discard earlier
@@ -10,12 +10,14 @@ committed findings.
 
 | Status | Meaning |
 | --- | --- |
+| Queued | Owned Web submission saved; no scanner has started. |
 | Running | Saved before launching Nuclei; final outcome has not been persisted. |
 | Succeeded | Nuclei exited with code 0, output processing and all finding writes finished, and the terminal update committed. Zero findings is valid. |
 | Failed | Startup, parsing, finding persistence, process exit, or shutdown failed. Earlier saved findings remain. |
 | Cancelled | Cancellation was handled and the terminal update committed. Earlier saved findings remain. |
 
-`StartedAt` and `CompletedAt` use UTC. `CompletedAt` and `ExitCode` are nullable:
+`EnqueuedAt`, `StartedAt` and `CompletedAt` use UTC. Queued work has no start time.
+`CompletedAt` and `ExitCode` are nullable:
 a running scan has no completion time, and a scanner that never started has no
 exit code. An exit code of zero alone does not imply success. `FailureReason`
 contains a safe, bounded description of the failing stage and exception type,
@@ -53,8 +55,8 @@ before. Historical diagnostic strings are left unchanged by the migration.
 - `IsotopeProbe.Core` is the class library: `ScanService` runs and saves a scan;
   `Nuclei/` contains process execution, DTOs, and JSONL parsing; `Domain/` contains
   entities; `Persistence/` contains the DbContext and existing migrations.
-- `IsotopeProbe.Web` is an ASP.NET Core Razor Pages host for read-only execution
-  and finding browsing. It registers Core’s DbContext and query service per request.
+- `IsotopeProbe.Web` is an ASP.NET Core Razor Pages host for owned scan submission and read-only
+  execution/finding browsing. Its background worker uses a fresh Core scope per job.
 - `IsotopeProbe.Tests` references all three projects to test CLI parsing, Core logic, and the Web authentication pipeline.
 
 The dependencies are CLI → Core and Web → Core. Web does not reference or invoke
@@ -91,7 +93,7 @@ or property order. See [Npgsql JSON mapping](https://www.npgsql.org/efcore/mappi
 ## Run locally
 
 Install the .NET 10 SDK and have a PostgreSQL server/database available (the existing
-local container can be used). Nuclei is required only for CLI scans, not browsing.
+local container can be used). Nuclei is required by both CLI scans and the Web worker, but not result queries.
 From the repository root, restore the tools and dependencies:
 
 ```bash
@@ -261,6 +263,10 @@ dotnet ef database update --project IsotopeProbe.Core --startup-project IsotopeP
 dotnet run --project IsotopeProbe.Web --launch-profile IsotopeProbe.Web
 ```
 
+```run queries
+select "Id", "Target", "StartedAt", "CompletedAt", "StandardError", "FailureReason", "Status", "OwnerUserId" from scan_executions ORDER BY "Id" DESC LIMIT 1;
+```
+
 Open **https://localhost:7080/**. On Linux, install/trust the generated development
 certificate in your browser if `dotnet dev-certs https --trust` requires additional
 platform setup. The launch profile binds HTTPS on localhost and enables Development
@@ -328,7 +334,7 @@ Application cookies use the `__Host-IsotopeProbe` name, Secure, HttpOnly, SameSi
 a non-sliding eight-hour ticket lifetime, and browser-session persistence. The
 framework's secure SameSite=None correlation cookie is retained for external login.
 Post-login destinations must pass framework local-URL validation. CSRF protection
-applies to login and logout forms. Responses containing application data use
+applies to login, logout and scan submission forms. Responses containing application data use
 `Cache-Control: no-store`. Each cookie-authenticated request checks that the local
 user still exists. Logout removes the browser cookie; there is no central session
 revocation store in this milestone, so a previously stolen cookie remains valid
@@ -432,3 +438,441 @@ or errors; all 85 tests passed against local PostgreSQL with none skipped. EF
 reports no pending model changes. Tests applied migrations only inside disposable
 test schemas; the main application database was not migrated. Google responses
 were mocked and no real Google credentials or live sign-in were exercised.
+
+
+## Start scans from Web
+
+Sign-in → **New scan** → POST → owned PostgreSQL `Queued` execution → immediate
+redirect to execution details. A single ASP.NET Core `BackgroundService` claims the
+oldest queued Web record and runs Nuclei through Core. Refresh pages manually to see
+status and findings. No scanner runs inside an HTTP request; the CLI is never invoked
+by Web. Users can select only operator-configured target IDs, with one fixed template
+profile. Arbitrary public URL scanning, template uploads, credentials and extra scanner
+arguments are not supported by the UI.
+
+The authenticated internal user ID supplies ownership. A Data Protection token binds
+each form's nonce to that user. Reposting the same valid submission returns that user's
+original execution, including after completion or configuration changes. A different
+user cannot reuse that token. Persist Data Protection keys as described above to retain
+valid forms across host restarts. The unique `(OwnerUserId, SubmissionId)` index adds a
+database safeguard. All browsing still uses ownership-filtered queries; groups confer
+no additional access.
+
+Admissions use a PostgreSQL transaction-scoped advisory lock (`724196381`). Every
+submission takes it before checking duplicates and counting queued/running Web rows.
+At READ COMMITTED isolation, the next admission sees the previous committed insert;
+concurrent requests cannot bypass limits. The worker claims with `FOR UPDATE SKIP
+LOCKED`, ordered by enqueue time then ID, and commits Running plus the actual start
+time before launching Nuclei. Competing workers cannot claim the same row. This does
+**not** impose a global execution limit across replicas: deploy **one Web worker
+instance**. It defaults to executing one job at a time. Direct CLI scans bypass Web queue limits.
+
+### Configuration and local walkthrough
+
+`IsotopeProbe.Web/appsettings.Development.json` supplies the existing local example:
+`local-sanity` → `http://localhost:8085`, profile `Sanity`, templates
+`~/Templates/sanity/`. Other environments have no allowed targets until configured.
+All settings are under `WebScans`; environment variables use double underscores:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `Targets` | Empty outside Development | Entries with unique `Id`, `Name`, HTTP(S) `Url` without credentials |
+| `TemplateProfile` | `Sanity` | Display name for the fixed profile |
+| `TemplatePath` | `~/Templates/sanity/` | Fixed templates for every Web scan |
+| `PerUserLimit` | `1` | Queued plus Running Web scans per owner |
+| `QueueLimit` | `20` | Queued Web scans globally |
+| `ConcurrentScans` | `1` | Executing jobs per Web instance, 1–20 |
+| `TimeoutSeconds` | `600` | Execution timeout, 1–86400 seconds |
+| `PollSeconds` | `2` | Worker wait between attempts, 1–60 seconds |
+| `ExecutablePath` | `nuclei` | Executable on Web's PATH or absolute path |
+
+Limits must be positive. Keep `ConcurrentScans=1` for this milestone’s default deployment. The resolved
+URL, absolute template path (including expanded `~/`), profile name and timeout are
+saved at admission. Changing configuration cannot redirect queued jobs to a different
+URL or template path. Template **file contents** and the Nuclei executable are not
+snapshotted: the operator must keep them available and stable while jobs are queued.
+The Web OS account must be able to execute Nuclei and read the templates. It must have
+network access to the configured local target. A missing executable fails the claimed
+job with a diagnostic; it does not stop the queue worker.
+
+```bash
+# Set database credentials only in the environment; also configure Google as above.
+read -rsp 'PostgreSQL connection string: ' ISOTOPEPROBE_CONNECTION_STRING
+export ISOTOPEPROBE_CONNECTION_STRING
+export WebScans__Targets__0__Id='local-sanity'
+export WebScans__Targets__0__Name='Local test target (8085)'
+export WebScans__Targets__0__Url='http://localhost:8085'
+export WebScans__TemplateProfile='Sanity'
+export WebScans__TemplatePath="$HOME/Templates/sanity/"
+export WebScans__PerUserLimit=1
+export WebScans__QueueLimit=20
+export WebScans__ConcurrentScans=1
+export WebScans__TimeoutSeconds=600
+export WebScans__PollSeconds=2
+export WebScans__ExecutablePath=nuclei
+
+dotnet build IsotopeProbe.slnx --no-restore -m:1
+dotnet ef database update --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli
+dotnet run --project IsotopeProbe.Web --launch-profile IsotopeProbe.Web
+```
+
+Ensure the existing local test target is available on port 8085, then open
+`https://localhost:7080`, sign in, select **New scan → Local test target (8085)**, and
+submit. Details show the saved execution immediately (it may already be Running by
+the time the browser loads). Refresh until terminal, then open a finding. In a second
+signed-in browser account, the execution and finding URLs must both return 404.
+Resending the same form must redirect to the original execution. A new form while
+that user's scan is queued/running displays a capacity message.
+
+`AddWebScanQueue` appends to the migration history: nullable start time, enqueue time,
+source, submission nonce, template path/profile and timeout, plus queue/idempotency
+indexes. Historical rows retain their timestamps/statuses and receive source `Cli`.
+Status values remain string-mapped and the enum's existing numeric values are explicit
+and unchanged. No startup migration runs. `ScanService` now shares the execution and
+finalization body between direct CLI creation and an already-persisted claimed record;
+findings keep the original execution ID.
+
+### Timeout, shutdown and recovery
+
+Timeout cancels Nuclei, kills its process tree through the existing runner, and records
+Failed with an explicit timeout reason. Graceful host shutdown stops further claims,
+cancels the active job and records Cancelled with an application-shutdown reason when
+the database is available. Previously saved findings remain. The host allows 40 seconds
+for shutdown, covering the existing 10-second finding-write, process-cleanup and
+final-write budgets with margin. Queued rows remain queued for the next startup.
+
+A crash/SIGKILL or database outage during finalization can leave Running records and
+possibly a scanner process behind. There is no startup sweep, lease, heartbeat or
+automatic retry. An unresolved Running Web scan continues to count against its owner's
+limit. Inspect the selected execution and confirm its scanner **and children** have
+stopped before explicitly recovering it:
+
+```bash
+dotnet run --project IsotopeProbe.Cli -- scans show 42
+# Only after manually confirming the process is no longer running:
+dotnet run --project IsotopeProbe.Cli -- scans recover-web 42 --confirmed-stopped
+```
+
+Recovery marks only that selected Running Web execution Failed, retains findings,
+and refuses queued, terminal, missing or CLI executions. The confirmation flag records
+operator intent; the command cannot establish process liveness. Recovery has no Web
+route and does not retry the scan. Users may submit a fresh form afterwards.
+
+### Queue verification
+
+```bash
+# Use a local test database whose user can create disposable schemas.
+read -rsp 'PostgreSQL test connection string: ' ISOTOPEPROBE_TEST_CONNECTION_STRING
+export ISOTOPEPROBE_TEST_CONNECTION_STRING
+dotnet test IsotopeProbe.slnx --no-restore -m:1
+# Focus on queue, token and HTTP submission tests:
+dotnet test IsotopeProbe.slnx --no-restore -m:1 --filter 'FullyQualifiedName~WebQueueTests|FullyQualifiedName~SubmissionTokenTests|FullyQualifiedName~WebSubmission'
+dotnet ef migrations has-pending-model-changes --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli --no-build
+```
+
+Queue tests use disposable `queue_test_*` schemas and controlled local fake scanner
+processes. HTTP tests use real cookie/Google/antiforgery middleware with mocked Google
+responses and disable the worker to verify enqueue-only requests. Separate worker
+tests verify execution, shutdown and restart. No test scans external targets.
+
+Verified for the Web queue milestone: solution build succeeded without warnings or
+errors; all **97 tests passed**, none skipped, against local PostgreSQL in disposable
+schemas. This includes the full HTTP submission → worker → persisted finding path
+with a controlled scanner and mocked Google responses. EF reported no pending model
+changes, and `git diff --check` passed. The main application database was not migrated.
+Live Nuclei sanity scans were verified on 2026-09-19 against `http://localhost:8085`
+through both the CLI and Core Web queue dispatcher. Both completed as Succeeded
+with exit code 0 and five persisted findings each (four high, one medium).
+The live queue check also verified duplicate-submission idempotency and owned result
+access. These checks used a disposable PostgreSQL schema that was removed afterward.
+Real Google sign-in remains a manual check.
+
+## Persistent targets and history
+
+A `Target` is an application identity owned by one local user. Each has an integer
+ID, name, exact URL, and `CreatedAtUtc`. The database permits one target per owner
+and exact URL; another user gets a separate target even for the same URL. URL
+comparison uses PostgreSQL's deterministic `C` collation. No scheme, host, path,
+query, case, or trailing-slash normalization is performed.
+
+An execution retains its owner and optionally references a target through
+`TargetId`. A composite foreign key enforces matching owners, and a check constraint
+forbids a linked execution without an owner. Referenced targets cannot be deleted.
+Findings still belong to executions. There is no ownership transfer, URL editing,
+target management UI, shared access through groups, or finding deduplication.
+
+The execution's `Target` string remains the actual scanned URL snapshot. Linking
+history never replaces it or changes template paths/profiles, timeout, status,
+timestamps, IDs, or saved evidence. The queue worker continues executing captured
+inputs, even if the operator changes the allowed-target configuration afterward.
+
+**A stored target is not permission to scan.** Web still accepts only the current
+server-configured allowed-target ID and the protected submission token. Core resolves
+that allowed URL, then finds or inserts the authenticated user's persistent target
+and queues a linked execution in the same transaction. Concurrent insertions reuse
+the database's unique owner/URL row. The allowed-target string ID used by the form
+is distinct from the persistent target's integer ID. Posting a persistent ID or an
+arbitrary URL does not select a scanning destination.
+
+Owned CLI scans use the same resolver before launching Nuclei. Existing commands and
+options remain available, including `--owner` and `ISOTOPEPROBE_OWNER_USER_ID`.
+Unowned CLI scans still have no target link and are invisible through Web.
+`scans assign --user <uuid> --executions <id> [<id> ...]` now links usable URLs as
+part of its existing all-or-nothing transaction; missing or already-owned executions
+still cause the whole assignment to fail. CLI-created and backfilled targets do not
+add entries to the Web allowlist.
+
+### Backfill and upgrade
+
+`20260919133329_AddPersistentTargets` appends to the existing migration history.
+Within the migration transaction it groups owned executions by owner and exact stored
+URL, creates one target per group with the URL as its initial name, and links the
+executions. `CreatedAtUtc` on these targets is **the migration transaction time**;
+the original creation time is unknown. New targets record their insertion time.
+
+For this milestone, the legacy resolver/backfill rule considers an input usable when
+it is an absolute HTTP(S) URL with a DNS/IPv4-style host or bracketed IPv6-style host,
+an optional numeric port, no credentials, and no whitespace. The original string
+is preserved. This is a conservative identity rule, not a connectivity check.
+Unowned executions and legacy inputs outside that rule remain unlinked. Assignment
+preserves such stored inputs. New owned CLI scans always create/reuse an identity
+for the exact supplied target string, including host-only inputs already accepted by
+Nuclei; this preserves CLI compatibility without enabling arbitrary Web destinations.
+`TargetId` remains nullable. Queued and Running legacy rows are
+linked when eligible without changing their captured inputs or lifecycle state.
+
+Before upgrading, back up the database and stop **all writers**: stop accepting Web
+submissions, allow active scans to finish where practical, stop the Web worker and
+CLI scan/assignment processes, and keep old binaries stopped. Graceful Web shutdown
+may record active work as Cancelled; it leaves queued work queued. An unresolved
+Running execution remains inspectable and follows the existing explicit recovery
+procedure. Do not mark it recovered until its scanner and children are confirmed
+stopped. The migration itself does not cancel, retry, recover, or launch scans.
+
+From the repository root, with the existing connection string exported:
+
+```bash
+# Stop the Web host and all CLI writers first; do not run old binaries afterward.
+dotnet build IsotopeProbe.slnx --no-restore -m:1
+dotnet ef database update 20260919133329_AddPersistentTargets \
+  --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli --no-build
+dotnet ef migrations has-pending-model-changes \
+  --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli --no-build
+# Restart only the upgraded host, with the existing Google and WebScans configuration.
+dotnet run --project IsotopeProbe.Web --no-build --launch-profile IsotopeProbe.Web
+```
+
+Do not upgrade while old instances continue writing: they cannot populate the new
+links. There is no startup migration or automatic catch-up backfill. Do not downgrade
+this migration to recover from a deployment issue: its Down operation removes target
+identity/history links (execution and finding rows survive).
+
+To identify unlinked legacy rows after upgrading, run this read-only SQL in your
+existing PostgreSQL client. Owned rows in this result require review of their stored
+URL; unowned rows are intentionally unlinked. Do not rewrite historical URLs merely
+to force a link.
+
+```sql
+SELECT "Id", "OwnerUserId", "Target", "Status"
+FROM scan_executions
+WHERE "TargetId" IS NULL
+ORDER BY "Id";
+```
+
+### Web walkthrough and verification
+
+Sign in and choose **Targets** to see your targets, execution counts, and the latest
+execution's time, persisted status, and finding count. That count belongs to the
+latest execution, not to a set of unique vulnerabilities across history. Targets
+sort by recorded time then ID descending; execution history sorts by enqueue/start
+time then ID descending, placing unknown times last.
+
+Open a target for paginated history and follow an execution to its existing details
+and findings. Execution details link back to target history when available. A target
+whose exact URL is no longer allowed displays a history-only explanation. For an
+allowed URL, **New scan** opens the existing allowlist selection form; select the URL
+there. No target page creates a second scan-submission path. Unknown target IDs and
+other users' target IDs both return 404.
+
+Tests create and remove disposable PostgreSQL schemas; they do not reset the main
+application tables. Export a test connection string for a local database account
+permitted to create schemas, then run:
+
+```bash
+read -rsp 'PostgreSQL test connection string: ' ISOTOPEPROBE_TEST_CONNECTION_STRING
+export ISOTOPEPROBE_TEST_CONNECTION_STRING
+dotnet test IsotopeProbe.slnx --no-restore -m:1
+# Optional focused rerun:
+dotnet test IsotopeProbe.slnx --no-build --filter 'FullyQualifiedName~TargetTests|FullyQualifiedName~WebSubmission'
+```
+
+Verified for the persistent-target milestone on 2026-09-19: the solution built with
+zero warnings/errors; all **105 tests passed**, none skipped, against disposable
+PostgreSQL schemas. Tests applied the full migration history to empty schemas and
+upgraded the previous queue migration with representative owned/unowned executions,
+findings, queued/running work, and unusable URLs. The upgrade preserved existing
+execution/finding/user data and backfilled the expected target links. HTTP tests
+verified authenticated target navigation and cross-owner 404s. EF reported no pending
+model changes, and `git diff --check` passed.
+
+Live owned CLI and Core queue scans against `http://localhost:8085` both succeeded
+with five persisted findings each, reused one target, and appeared together in its
+history. The disposable live schema was removed. The application database was not
+migrated; follow the stop/migrate/restart sequence above. Real Google sign-in remains
+a manual check (automated HTTP tests mock Google's responses).
+
+## Optional matcher names and scan comparison
+
+`Finding.MatcherName` is a nullable string from Nuclei's top-level `matcher-name`.
+It is distinct from the existing nullable Boolean `MatcherStatus` (`matcher-status`).
+Missing, null, blank, and unexpected matcher-name value types become null; valid
+nonblank strings retain their original case and surrounding characters. Only this
+optional field has tolerant deserialization. Malformed JSON and unrelated field
+errors still follow the existing parser rules. The parser retains the original raw
+JSON string; PostgreSQL continues storing it as `jsonb`, as before. Neither ingestion
+nor backfill rewrites saved evidence to manufacture a matcher name.
+
+### Matcher-name upgrade and backfill
+
+`20260919151713_AddMatcherName` adds one nullable column and runs a set-based SQL
+backfill in the migration transaction. It extracts only nonblank top-level strings
+from `findings."RawJson"`; nested values, scalars, arrays, nulls, numbers, Booleans,
+and blank names are ignored. Its whitespace test matches .NET's whitespace characters.
+RawJson is already `jsonb`: invalid JSON syntax cannot be stored in that column, but
+valid JSON with an unsuitable shape is handled safely. The SQL includes a null-only
+update guard. It never loads the findings table into application memory, and does not
+change existing matcher status or evidence.
+
+The backfill scans the findings table and updates qualifying rows, so plan a
+maintenance window appropriate to its size (including PostgreSQL WAL and transaction
+space). Back up the database, stop Web/worker and CLI writers, apply the migration,
+and restart only upgraded binaries. Old writers do not persist matcher names.
+There is no automatic startup migration or separate backfill command: the backfill
+is part of this migration. Records without usable stored metadata remain null.
+
+With `ISOTOPEPROBE_CONNECTION_STRING` already exported, run from the repository root:
+
+```bash
+dotnet build IsotopeProbe.slnx --no-restore -m:1
+dotnet ef database update 20260919151713_AddMatcherName \
+  --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli --no-build
+dotnet ef migrations has-pending-model-changes \
+  --project IsotopeProbe.Core --startup-project IsotopeProbe.Cli --no-build
+dotnet run --project IsotopeProbe.Web --no-build --launch-profile IsotopeProbe.Web
+```
+
+The previous persistent-target upgrade command is retained above for that milestone;
+use the matcher-name migration command here to upgrade to the current schema.
+
+### Comparison rules and interpretation
+
+Comparisons are read-only and computed on demand. Both executions must independently
+belong to the signed-in user, reference the same non-null target, have persisted
+Succeeded status and a completion timestamp, and be different executions. Groups
+provide no additional access. Unknown and inaccessible executions return 404;
+accessible but ineligible pairs receive a validation explanation.
+
+The reusable Core identity policy uses a structured key of **TemplateId, MatchedAt,
+and optional MatcherName**, with ordinal, case-sensitive equality. URLs are not
+normalized: paths, query strings, scheme, case, and trailing slashes remain distinct.
+Null, empty, and whitespace-only matcher names all mean absent. Two absent names
+match by template/location; two present names must match exactly; an absent name is
+never a wildcard for a present one. When name availability differs for a shared
+template/location, a warning explains that missing historical metadata may account
+for the apparent difference.
+
+Blank/missing template IDs or matched locations cannot identify a finding safely.
+Those records are excluded from the three categories and listed separately, with
+counts and links to their stored evidence. New ingestion continues requiring those
+fields; this exclusion handles incomplete historical or operator-imported records.
+
+The categories compare sets of keys:
+
+- **Newly detected:** present only in the newer execution.
+- **Detected in both:** present in both executions.
+- **No longer detected:** present only in the older/baseline execution.
+
+Repeated records with one key form one comparison item, with occurrence counts and
+paginated links to every associated finding. Raw finding-record counts are displayed
+separately from unique comparison-item counts. All original records remain stored.
+Severity, descriptions, and evidence are not identity fields. Older/newer severity
+sets are shown side by side so a severity change does not become a new identity.
+There is no persistent issue table, cross-scan deduplication of stored findings, or
+saved comparison result.
+
+**No longer detected does not mean fixed.** A successful process lifecycle does not
+prove identical coverage or that every check succeeded. The page displays captured
+URL, template path/profile, and timeout side by side, and warns if they differ.
+Execution-level Nuclei version, template version/hash, and non-secret scan-mode/auth
+context identifiers are not recorded by the current model; the page labels them as
+unavailable and always warns that coverage cannot be established. An identical
+mutable template directory path alone cannot prove identical template content.
+No authentication secrets, request/response bodies, or raw JSON are fetched as
+comparison metadata; evidence stays on the existing authorized finding pages.
+
+### Choosing scans and performance limits
+
+On a successful execution, choose **Compare with previous successful scan**. The
+previous scan must have an earlier start timestamp, or the same timestamp and a
+lower execution ID; failed, cancelled, queued, and running scans are skipped.
+If no previous successful scan is known, the details page explains that. **Choose a
+different successful baseline** opens a paginated list of other completed successful
+executions of the owned target. If a manually chosen baseline does not precede the
+newer scan, the page warns that category direction follows your explicit selection.
+Execution IDs, start timestamps, and captured URLs label both sides.
+
+The current PoC compares at most **25,000 finding records per execution**. Core
+projects only ID, template ID, matched location, matcher name, and severity, and
+fetches at most the limit plus one to detect overflow. Oversized comparisons are
+rejected explicitly rather than silently truncated. Grouping and set comparison run
+in memory with the shared .NET identity policy, avoiding differences between SQL
+collation/whitespace rules and application equality. Work and memory scale with the
+combined summary-field size of the two bounded sets, not their raw evidence size.
+This is not a byte limit; unusually long identity fields still increase memory use.
+A future high-volume implementation would need database-side grouping with equivalent
+identity semantics before increasing this limit.
+
+Category results and occurrence links are paginated (20 per page). Baseline selection
+uses database-side filtering, ordering, and pagination. Comparison requests recompute
+the bounded summary sets; nothing is cached or persisted. Cancellation propagates
+through database reads and comparison work. Normal scans and finding browsing are
+not subject to the comparison record limit.
+
+### Local comparison verification
+
+Automated tests use disposable PostgreSQL schemas. With an exported
+`ISOTOPEPROBE_TEST_CONNECTION_STRING` for an account allowed to create schemas:
+
+```bash
+dotnet test IsotopeProbe.slnx --no-restore -m:1
+# Focused comparison/parser/migration tests:
+dotnet test IsotopeProbe.slnx --no-build \
+  --filter 'FullyQualifiedName~MatcherNameTests|FullyQualifiedName~FindingComparisonTests|FullyQualifiedName~ScanComparisonTests|FullyQualifiedName~ComparisonPages'
+# Controlled, reproducible output-fixture demonstration:
+dotnet test IsotopeProbe.slnx --no-build \
+  --filter FullyQualifiedName~LocalFixturesDemonstrateNewBothAndNoLongerDetected
+```
+
+`IsotopeProbe.Tests/Fixtures/Comparison/baseline.jsonl` and `newer.jsonl` are explicit
+controlled scanner-output fixtures referring only to localhost:8085. The demonstration
+ingests and persists them, then verifies one newly detected item, one recurring item,
+and one no-longer-detected item. The recurring item has two baseline records and one
+newer record, with a severity change. These are synthetic outputs, not a claim of a
+live scan; the test does not modify the default test site or contact external targets.
+
+For a manual Web walkthrough after upgrading, sign in, submit two scans of the
+existing allowed local target, wait for both to succeed, open the newer execution,
+and follow the comparison link. Browse each category and the occurrence links, then
+choose another successful baseline if available. An unchanged target/template set
+may produce only recurring findings. Review the coverage warnings even in that case.
+
+Verified for this milestone on 2026-09-19: the solution built with zero warnings and
+errors; all **130 tests passed**, none skipped, using disposable PostgreSQL schemas.
+This includes upgrading the previous migration with representative raw JSON shapes,
+full migration history on fresh schemas, Unicode blank-name handling, unchanged raw
+evidence/matcher status, comparison categories and duplicate evidence, authorization
+of both execution IDs, HTTP encoding, pagination, and explicit oversized-pair rejection.
+The controlled JSONL fixture demonstration passed. EF reported no pending model
+changes and `git diff --check` passed. The working application database was not
+migrated or reset, and no external targets were scanned. Real Google sign-in and the
+manual browser walkthrough remain operator checks; HTTP tests mock Google responses.

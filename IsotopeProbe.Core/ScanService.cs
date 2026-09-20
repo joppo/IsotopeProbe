@@ -15,7 +15,10 @@ public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db)
     {
         if (ownerUserId is Guid owner)
             await new Identity.UserService(db).RequireUserAsync(owner, cancellationToken);
-        var execution = new ScanExecution { Target = target, StartedAt = DateTimeOffset.UtcNow, OwnerUserId = ownerUserId };
+        int? targetId = ownerUserId is Guid targetOwner
+            ? await new Targets.TargetResolver(db).ResolveAsync(targetOwner, target, token: cancellationToken)
+            : null;
+        var execution = new ScanExecution { TargetId = targetId, Target = target, StartedAt = DateTimeOffset.UtcNow, OwnerUserId = ownerUserId, TemplatePath = templatePath };
         db.ScanExecutions.Add(execution);
         try
         {
@@ -27,10 +30,17 @@ public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db)
             throw new ScanPersistenceException("Could not confirm the Running execution was saved. Nuclei was not launched.");
         }
 
+        return await ExecuteAsync(execution, cancellationToken);
+    }
+
+    // Only queue orchestration may execute a claimed record. CLI still creates its own.
+    internal async Task<ScanExecution> ExecuteAsync(ScanExecution execution,
+        CancellationToken cancellationToken, Func<(ScanStatus Status, string Reason)?>? cancellationOutcome = null)
+    {
         NucleiRunResult result;
         try
         {
-            result = await runner.RunAsync(target, templatePath, async finding =>
+            result = await runner.RunAsync(execution.Target, execution.TemplatePath, async finding =>
             {
                 finding.ScanExecutionId = execution.Id;
                 db.Findings.Add(finding);
@@ -53,6 +63,12 @@ public sealed class ScanService(NucleiRunner runner, IsotopeProbeDbContext db)
             : ScanStatus.Succeeded;
         var completedAt = DateTimeOffset.UtcNow;
         var reason = result.FailureReason ?? (status == ScanStatus.Cancelled ? "Scan cancellation requested." : null);
+
+        if (status == ScanStatus.Cancelled && cancellationOutcome?.Invoke() is { } outcome)
+        {
+            status = outcome.Status;
+            reason = outcome.Reason + (result.FailureReason is null ? "" : " " + result.FailureReason);
+        }
 
         // A failed finding write must not be retried as part of finalization.
         foreach (var entry in db.ChangeTracker.Entries<Finding>().Where(x => x.State == EntityState.Added).ToList())

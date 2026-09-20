@@ -3,13 +3,13 @@
 @{ ViewData["Title"] = "Scan executions"; }
 <h1>Scan executions</h1>
 <p>@Model.Scans.TotalCount saved execution(s). Newest first.</p>
-@if (Model.Scans.TotalCount == 0) { <p>No scans saved yet. Run a scan through the CLI, then reload this page.</p> }
+@if (Model.Scans.TotalCount == 0) { <p>No scans saved yet. Choose New scan to queue your first scan.</p> }
 else if (Model.Scans.Items.Count == 0) { <p>No executions on this page. <a asp-page="/Index">Return to the first page</a>.</p> }
 else {
 <div class="table-scroll"><table>
-<thead><tr><th>ID</th><th>Target URL</th><th>Started (UTC)</th><th>Persisted status</th><th>Findings</th></tr></thead>
+<thead><tr><th>ID</th><th>Target URL</th><th>Enqueued (UTC)</th><th>Started (UTC)</th><th>Persisted status</th><th>Findings</th></tr></thead>
 <tbody>@foreach (var scan in Model.Scans.Items) {
-<tr><td><a asp-page="/Executions/Details" asp-route-id="@scan.Id">@scan.Id</a></td><td>@scan.Target</td><td>@Display.Utc(scan.StartedAt)</td><td><span class="badge @Display.Tone(scan.Status.ToString())">@scan.Status</span></td><td>@scan.FindingCount</td></tr>
+<tr><td><a asp-page="/Executions/Details" asp-route-id="@scan.Id">@scan.Id</a></td><td>@scan.Target</td><td>@Display.Utc(scan.EnqueuedAt)</td><td>@(scan.StartedAt is null ? "Not started" : Display.Utc(scan.StartedAt))</td><td><span class="badge @Display.Tone(scan.Status.ToString())">@scan.Status</span></td><td>@scan.FindingCount</td></tr>
 }</tbody></table></div>
 }
 <nav aria-label="Pagination">

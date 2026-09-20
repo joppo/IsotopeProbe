@@ -14,10 +14,10 @@ internal sealed class ScanQueryService(IQueryable<ScanExecution> executions, IQu
         ValidatePagination(skip, take);
         var scans = executions;
         var total = await scans.CountAsync(cancellationToken);
-        var items = await scans.OrderByDescending(x => x.StartedAt).ThenByDescending(x => x.Id)
+        var items = await scans.OrderByDescending(x => x.EnqueuedAt ?? x.StartedAt ?? DateTimeOffset.MinValue).ThenByDescending(x => x.Id)
             .Skip(skip).Take(take)
             .Select(x => new ScanSummary(x.Id, x.Target, x.StartedAt, x.CompletedAt,
-                x.ExitCode, x.Findings.Count, x.Status))
+                x.ExitCode, x.Findings.Count, x.Status, x.EnqueuedAt, x.TemplateProfile, x.TargetId))
             .ToListAsync(cancellationToken);
         return new Page<ScanSummary>(items, total, skip, take);
     }
@@ -29,7 +29,7 @@ internal sealed class ScanQueryService(IQueryable<ScanExecution> executions, IQu
             .Select(x => new
             {
                 Execution = new ScanSummary(x.Id, x.Target, x.StartedAt, x.CompletedAt,
-                    x.ExitCode, x.Findings.Count, x.Status),
+                    x.ExitCode, x.Findings.Count, x.Status, x.EnqueuedAt, x.TemplateProfile, x.TargetId),
                 x.StandardError,
                 x.FailureReason
             })
@@ -73,7 +73,7 @@ internal sealed class ScanQueryService(IQueryable<ScanExecution> executions, IQu
             .Select(x => new FindingDetails(x.Id, x.ScanExecutionId, x.TemplateId, x.Name,
                 x.Severity, x.MatchedAt, x.TemplatePath, x.Authors, x.Tags, x.Type,
                 x.Host, x.Port, x.Scheme, x.Url, x.IpAddress, x.Timestamp, x.MatcherStatus,
-                x.Request, x.Response, x.CurlCommand, x.RawJson))
+                x.Request, x.Response, x.CurlCommand, x.RawJson, x.MatcherName))
             .SingleOrDefaultAsync(cancellationToken);
     }
 

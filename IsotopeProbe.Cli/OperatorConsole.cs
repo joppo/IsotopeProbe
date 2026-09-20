@@ -6,10 +6,12 @@ namespace IsotopeProbe.Cli;
 public static class OperatorConsole
 {
     public static bool IsOperation(string[] args) => args.Length > 0 &&
-        (args[0] == "groups" || (args[0] == "scans" && args.Length > 1 && args[1] == "assign"));
+        (args[0] == "groups" || (args[0] == "scans" && args.Length > 1 && args[1] is "assign" or "recover-web"));
 
     public static void Validate(string[] args)
     {
+        if (args.Length == 4 && args[0] == "scans" && args[1] == "recover-web" && args[3] == "--confirmed-stopped")
+        { PositiveId(args[2]); return; }
         if (args.Length >= 6 && args[0] == "scans" && args[1] == "assign" && args[2] == "--user" && args[4] == "--executions")
         {
             UserId(args[3]);
@@ -29,6 +31,12 @@ public static class OperatorConsole
     public static async Task<int> RunAsync(string[] args, IsotopeProbeDbContext db, CancellationToken token)
     {
         Validate(args);
+        if (args[0] == "scans" && args[1] == "recover-web")
+        {
+            await new IsotopeProbe.Queue.WebScanRecovery(db).MarkInterruptedFailedAsync(PositiveId(args[2]), token);
+            Console.WriteLine("Marked selected interrupted Web execution Failed; saved findings retained.");
+            return 0;
+        }
         var groups = new GroupService(db);
         if (args[0] == "scans")
         {

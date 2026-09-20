@@ -84,7 +84,7 @@ public sealed class LifecycleTests : IAsyncLifetime
             Assert.True(saved.Succeeded);
             Assert.Equal(0, saved.ExitCode);
             Assert.NotNull(saved.CompletedAt);
-            Assert.Equal(TimeSpan.Zero, saved.StartedAt.Offset);
+            Assert.Equal(TimeSpan.Zero, saved.StartedAt!.Value.Offset);
             Assert.Equal(count, saved.Findings.Count);
         }
     }
@@ -265,6 +265,8 @@ public sealed class LifecycleTests : IAsyncLifetime
         Assert.Equal(7, scans[1].ExitCode);
         Assert.All(scans, x => Assert.Equal("old diagnostic", x.StandardError));
         Assert.All(scans, x => Assert.Null(x.FailureReason));
+        Assert.All(scans, x => Assert.Equal(ScanSource.Cli, x.Source));
+        Assert.All(scans, x => Assert.Null(x.EnqueuedAt));
         Assert.Contains("20260911123031_InitialCreate", await db.Database.GetAppliedMigrationsAsync());
     }
 

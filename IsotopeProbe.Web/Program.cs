@@ -1,3 +1,7 @@
+using IsotopeProbe;
+using IsotopeProbe.Nuclei;
+using IsotopeProbe.Queue;
+using IsotopeProbe.Web.Scanning;
 using System.Security.Claims;
 using IsotopeProbe.Identity;
 using IsotopeProbe.Persistence;
@@ -25,6 +29,8 @@ builder.Services.AddScoped(sp =>
     return new ScanUser(id);
 });
 builder.Services.AddScoped<OwnedScanQueryService>();
+builder.Services.AddScoped<OwnedTargetQueryService>();
+builder.Services.AddScoped<IsotopeProbe.Comparisons.OwnedScanComparisonService>();
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
@@ -62,7 +68,24 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 builder.Services.AddAuthorization(options => options.FallbackPolicy =
     new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build());
 builder.Services.AddAntiforgery(options => options.Cookie.SecurePolicy = CookieSecurePolicy.Always);
+builder.Services.AddSingleton(sp =>
+{
+    var options = sp.GetRequiredService<IConfiguration>().GetSection("WebScans").Get<WebScanOptions>() ?? new();
+    options.Validate();
+    return options;
+});
+builder.Services.AddSingleton<SubmissionTokens>();
+builder.Services.AddScoped<OwnedScanSubmissionService>();
+builder.Services.AddScoped<NucleiFindingParser>();
+builder.Services.AddScoped(sp => new NucleiRunner(sp.GetRequiredService<NucleiFindingParser>(),
+    sp.GetRequiredService<WebScanOptions>().ExecutablePath));
+builder.Services.AddScoped<ScanService>();
+builder.Services.AddScoped<WebScanDispatcher>();
+builder.Services.AddHostedService<ScanWorker>();
+// Finding write (10s), process cleanup (10s), final write (10s), plus margin.
+builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(40));
 var app = builder.Build();
+app.Services.GetRequiredService<WebScanOptions>();
 // Validate before accepting requests, after all host configuration sources are applied.
 Required("ISOTOPEPROBE_CONNECTION_STRING");
 Required("Authentication:Google:ClientId");

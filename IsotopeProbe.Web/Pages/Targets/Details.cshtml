@@ -1,0 +1,28 @@
+@page "/targets/{id:int}"
+@model IsotopeProbe.Web.Pages.Targets.DetailsModel
+@{ ViewData["Title"] = Model.Target.Name; }
+<p><a asp-page="/Targets/Index">All targets</a></p>
+<h1>@Model.Target.Name</h1>
+<dl><dt>URL</dt><dd>@Model.Target.Url</dd><dt>Recorded (UTC)</dt><dd>@Display.Utc(Model.Target.CreatedAtUtc)</dd></dl>
+<p>For backfilled targets, the recorded time is the migration time, not the original creation time.</p>
+@if (Model.IsAllowed) {
+    <p><a asp-page="/Executions/New">New scan</a> — select this URL from the current allowed targets.</p>
+} else {
+    <p>This target is available for history only. Its URL is not currently allowed for Web scanning.</p>
+}
+<h2>Execution history</h2>
+<p>@Model.History.TotalCount execution(s). Newest first. URLs below are the captured scan inputs.</p>
+@if (Model.History.TotalCount == 0) { <p>No executions recorded for this target.</p> }
+else if (Model.History.Items.Count == 0) { <p>No executions on this page. <a asp-route-id="@Model.Target.Id" asp-route-skip="0">Return to the first page</a>.</p> }
+else {
+<div class="table-scroll"><table>
+<thead><tr><th>Execution</th><th>Scanned URL</th><th>Enqueued / started (UTC)</th><th>Persisted status</th><th>Findings in execution</th></tr></thead>
+<tbody>@foreach (var scan in Model.History.Items) {
+<tr><td><a asp-page="/Executions/Details" asp-route-id="@scan.Id">@scan.Id</a></td><td>@scan.Target</td><td>@Display.Utc(scan.EnqueuedAt ?? scan.StartedAt)</td><td>@scan.Status</td><td>@scan.FindingCount</td></tr>
+}</tbody></table></div>
+}
+<nav aria-label="Execution history pagination">
+@if (Model.History.Skip > 0) { <a asp-route-id="@Model.Target.Id" asp-route-skip="@Math.Max(0, Model.History.Skip - 20)">Previous</a> }
+@if ((long)Model.History.Skip + 20 < Model.History.TotalCount) { <a asp-route-id="@Model.Target.Id" asp-route-skip="@(Model.History.Skip + 20)">Next</a> }
+</nav>
+<p>Running is the last persisted state, not proof that a scanner process is alive.</p>

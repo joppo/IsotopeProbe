@@ -7,8 +7,10 @@
     <link rel="stylesheet" href="~/site.css" />
 </head>
 <body>
-<header><a asp-page="/Index">IsotopeProbe · Scan executions</a><p>Local, read-only results browser</p>@if (User.Identity?.IsAuthenticated == true)
+<header><a asp-page="/Index">IsotopeProbe · Scan executions</a><p>Local scans and results</p>@if (User.Identity?.IsAuthenticated == true)
 {
+    <a asp-page="/Targets/Index">Targets</a>
+    <a asp-page="/Executions/New">New scan</a>
     <a asp-page="/Account/Index">Your account</a>
     <form method="post" asp-page="/Account/Logout"><button type="submit">Sign out</button></form>
 }

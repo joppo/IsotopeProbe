@@ -1,0 +1,22 @@
+@page "/targets"
+@model IsotopeProbe.Web.Pages.Targets.IndexModel
+@{ ViewData["Title"] = "Targets"; }
+<h1>Targets</h1>
+<p>@Model.Targets.TotalCount target(s). Most recently recorded first.</p>
+@if (Model.Targets.TotalCount == 0) {
+    <p>No targets yet. <a asp-page="/Executions/New">Queue a scan of an allowed target</a> to start its history.</p>
+} else if (Model.Targets.Items.Count == 0) {
+    <p>No targets on this page. <a asp-route-skip="0">Return to the first page</a>.</p>
+} else {
+<div class="table-scroll"><table>
+<thead><tr><th>Name / URL</th><th>Executions</th><th>Latest execution (UTC)</th><th>Latest status</th><th>Findings in latest execution</th></tr></thead>
+<tbody>@foreach (var target in Model.Targets.Items) {
+<tr><td><a asp-page="/Targets/Details" asp-route-id="@target.Id">@target.Name</a><br />@target.Url</td>
+<td>@target.ExecutionCount</td><td>@Display.Utc(target.LatestExecution?.EnqueuedAt ?? target.LatestExecution?.StartedAt)</td>
+<td>@(target.LatestExecution?.Status.ToString() ?? "No executions")</td><td>@(target.LatestExecution?.FindingCount.ToString() ?? "—")</td></tr>
+}</tbody></table></div>
+}
+<nav aria-label="Target pagination">
+@if (Model.Targets.Skip > 0) { <a asp-route-skip="@Math.Max(0, Model.Targets.Skip - 20)">Previous</a> }
+@if ((long)Model.Targets.Skip + 20 < Model.Targets.TotalCount) { <a asp-route-skip="@(Model.Targets.Skip + 20)">Next</a> }
+</nav>

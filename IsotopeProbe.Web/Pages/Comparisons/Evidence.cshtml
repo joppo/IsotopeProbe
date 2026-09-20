@@ -1,0 +1,13 @@
+@page "/comparison-records"
+@model IsotopeProbe.Web.Pages.Comparisons.EvidenceModel
+@{ ViewData["Title"] = "Comparison records"; var result = Model.Evidence; }
+<h1>Comparison records</h1>
+<p><a asp-page="/Comparisons/Index" asp-route-newerId="@result.Newer.Id" asp-route-olderId="@result.Older.Id">Back to comparison</a></p>
+<p>@(result.Baseline ? "Older / baseline" : "Newer") execution @(result.Baseline ? result.Older.Id : result.Newer.Id): @result.Records.TotalCount occurrence(s).</p>
+<ul>@foreach (var record in result.Records.Items) {
+<li><a asp-page="/Findings/Details" asp-route-id="@record.Id">Finding @record.Id</a> · @record.TemplateId · @record.MatchedAt · @record.MatcherName · @record.Severity</li>
+}</ul>
+<nav aria-label="Evidence records pagination">
+@if (result.Records.Skip > 0) { <a asp-route-olderId="@result.Older.Id" asp-route-newerId="@result.Newer.Id" asp-route-baseline="@result.Baseline" asp-route-representativeId="@Model.RepresentativeId" asp-route-skip="@Math.Max(0, result.Records.Skip - 20)">Previous</a> }
+@if ((long)result.Records.Skip + 20 < result.Records.TotalCount) { <a asp-route-olderId="@result.Older.Id" asp-route-newerId="@result.Newer.Id" asp-route-baseline="@result.Baseline" asp-route-representativeId="@Model.RepresentativeId" asp-route-skip="@(result.Records.Skip + 20)">Next</a> }
+</nav>

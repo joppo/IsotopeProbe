@@ -22,6 +22,7 @@ catch (ArgumentException exception)
     Console.Error.WriteLine("       IsotopeProbe scans list [--skip <n>] [--take <n>]");
     Console.Error.WriteLine("       IsotopeProbe scans show <id>");
     Console.Error.WriteLine("       IsotopeProbe findings list --scan <id> [--skip <n>] [--take <n>]");
+    Console.Error.WriteLine("       IsotopeProbe scans recover-web <id> --confirmed-stopped");
     Console.Error.WriteLine("       IsotopeProbe scans assign --user <uuid> --executions <id> [<id> ...]");
     Console.Error.WriteLine("       IsotopeProbe groups create <name> [description]");
     Console.Error.WriteLine("       IsotopeProbe groups add|remove --user <uuid> --group <id>");

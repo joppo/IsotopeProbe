@@ -5,8 +5,8 @@ namespace IsotopeProbe.Queries;
 public sealed record Page<T>(IReadOnlyList<T> Items, int TotalCount, int Skip, int Take);
 
 public sealed record ScanSummary(
-    int Id, string Target, DateTimeOffset StartedAt, DateTimeOffset? CompletedAt,
-    int? ExitCode, int FindingCount, ScanStatus Status)
+    int Id, string Target, DateTimeOffset? StartedAt, DateTimeOffset? CompletedAt,
+    int? ExitCode, int FindingCount, ScanStatus Status, DateTimeOffset? EnqueuedAt = null, string? TemplateProfile = null, int? TargetId = null)
 {
     public bool Succeeded => Status == ScanStatus.Succeeded;
 }
@@ -24,4 +24,4 @@ public sealed record FindingDetails(
     string MatchedAt, string? TemplatePath, IReadOnlyList<string> Authors,
     IReadOnlyList<string> Tags, string? Type, string? Host, string? Port, string? Scheme,
     string? Url, string? IpAddress, string? Timestamp, bool? MatcherStatus,
-    string? Request, string? Response, string? CurlCommand, string RawJson);
+    string? Request, string? Response, string? CurlCommand, string RawJson, string? MatcherName = null);

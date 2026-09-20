@@ -68,6 +68,9 @@ namespace IsotopeProbe.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("MatcherName")
+                        .HasColumnType("text");
+
                     b.Property<bool?>("MatcherStatus")
                         .HasColumnType("boolean");
 
@@ -165,6 +168,9 @@ namespace IsotopeProbe.Persistence.Migrations
                     b.Property<DateTimeOffset?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTimeOffset?>("EnqueuedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<int?>("ExitCode")
                         .HasColumnType("integer");
 
@@ -175,11 +181,18 @@ namespace IsotopeProbe.Persistence.Migrations
                     b.Property<Guid?>("OwnerUserId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasDefaultValue("Cli");
+
                     b.Property<string>("StandardError")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<DateTimeOffset>("StartedAt")
+                    b.Property<DateTimeOffset?>("StartedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Status")
@@ -187,15 +200,69 @@ namespace IsotopeProbe.Persistence.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
+                    b.Property<Guid?>("SubmissionId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Target")
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int?>("TargetId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("TemplatePath")
+                        .HasColumnType("text");
+
+                    b.Property<string>("TemplateProfile")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("TimeoutSeconds")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
-                    b.HasIndex("OwnerUserId");
+                    b.HasIndex("OwnerUserId", "SubmissionId")
+                        .IsUnique();
 
-                    b.ToTable("scan_executions", (string)null);
+                    b.HasIndex("TargetId", "OwnerUserId");
+
+                    b.HasIndex("Source", "Status", "EnqueuedAt", "Id");
+
+                    b.ToTable("scan_executions", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_scan_executions_TargetRequiresOwner", "\"TargetId\" IS NULL OR \"OwnerUserId\" IS NOT NULL");
+                        });
+                });
+
+            modelBuilder.Entity("IsotopeProbe.Domain.Target", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("OwnerUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .UseCollation("C");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OwnerUserId", "Url")
+                        .IsUnique();
+
+                    b.ToTable("targets", (string)null);
                 });
 
             modelBuilder.Entity("IsotopeProbe.Domain.User", b =>
@@ -262,7 +329,22 @@ namespace IsotopeProbe.Persistence.Migrations
                         .HasForeignKey("OwnerUserId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("IsotopeProbe.Domain.Target", null)
+                        .WithMany()
+                        .HasForeignKey("TargetId", "OwnerUserId")
+                        .HasPrincipalKey("Id", "OwnerUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("OwnerUser");
+                });
+
+            modelBuilder.Entity("IsotopeProbe.Domain.Target", b =>
+                {
+                    b.HasOne("IsotopeProbe.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("IsotopeProbe.Domain.UserGroup", b =>

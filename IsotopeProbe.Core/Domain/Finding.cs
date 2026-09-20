@@ -36,6 +36,8 @@ public sealed class Finding
 
     public string? Timestamp { get; set; }
 
+    public string? MatcherName { get; set; }
+
     public bool? MatcherStatus { get; set; }
 
     public string? Request { get; set; }

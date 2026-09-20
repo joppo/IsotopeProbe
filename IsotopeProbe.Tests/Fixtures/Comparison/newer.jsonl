@@ -1,0 +1,2 @@
+{"template-id":"unchanged","info":{"name":"Unchanged local condition","severity":"low"},"matched-at":"http://localhost:8085/unchanged","matcher-name":"body","matcher-status":true,"response":"newer evidence"}
+{"template-id":"added","info":{"name":"Newly detected local condition","severity":"info"},"matched-at":"http://localhost:8085/added","matcher-status":true}

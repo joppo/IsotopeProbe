@@ -25,4 +25,7 @@
     <ProjectReference Include="../IsotopeProbe.Cli/IsotopeProbe.Cli.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures/Comparison/*.jsonl" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

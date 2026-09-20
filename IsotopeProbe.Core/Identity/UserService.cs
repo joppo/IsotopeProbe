@@ -63,6 +63,16 @@ public sealed class UserService(IsotopeProbeDbContext db)
             .ExecuteUpdateAsync(s => s.SetProperty(x => x.OwnerUserId, userId), cancellationToken);
         if (updated != executionIds.Count)
             throw new ArgumentException("An execution is missing or already owned. No ownership was changed.");
+        var assigned = await db.ScanExecutions.AsNoTracking().Where(x => executionIds.Contains(x.Id))
+            .Select(x => new { x.Id, x.Target }).ToListAsync(cancellationToken);
+        // Resolve URLs in a stable order to avoid inverse lock ordering between assignments.
+        foreach (var group in assigned.GroupBy(x => x.Target).OrderBy(x => x.Key, StringComparer.Ordinal))
+        {
+            var targetId = await new Targets.TargetResolver(db).ResolveLegacyAsync(userId, group.Key, cancellationToken);
+            var ids = group.Select(x => x.Id).ToArray();
+            await db.ScanExecutions.Where(x => ids.Contains(x.Id))
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.TargetId, targetId), cancellationToken);
+        }
         await transaction.CommitAsync(cancellationToken);
     }
 }

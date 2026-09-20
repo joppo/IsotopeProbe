@@ -14,7 +14,7 @@ internal static class QueryConsole
                 var scans = await queries.ListScansAsync(options.Skip, options.Take, cancellationToken);
                 Console.WriteLine("ID\tSTARTED (UTC)\tSTATUS\tFINDINGS\tTARGET");
                 foreach (var scan in scans.Items)
-                    Console.WriteLine($"{scan.Id}\t{scan.StartedAt.UtcDateTime:O}\t{Status(scan)}\t{scan.FindingCount}\t{Clean(scan.Target)}");
+                    Console.WriteLine($"{scan.Id}\t{scan.StartedAt?.UtcDateTime:O}\t{Status(scan)}\t{scan.FindingCount}\t{Clean(scan.Target)}");
                 PrintPage(scans, "scans");
                 return 0;
 
@@ -24,7 +24,7 @@ internal static class QueryConsole
                     return NotFound(options.ScanId.Value);
                 var execution = details.Execution;
                 Console.WriteLine($"Scan {execution.Id}: {Clean(execution.Target)}");
-                Console.WriteLine($"Started (UTC): {execution.StartedAt.UtcDateTime:O}");
+                Console.WriteLine($"Started (UTC): {execution.StartedAt?.UtcDateTime:O}");
                 Console.WriteLine($"Completed (UTC): {(execution.CompletedAt is { } completed ? completed.UtcDateTime.ToString("O") : "not completed")}");
                 Console.WriteLine($"Status: {Status(execution)} (exit code {execution.ExitCode?.ToString() ?? "unavailable"})");
                 if (execution.Status == ScanStatus.Running)

@@ -49,6 +49,10 @@ public sealed class NucleiFindingDto
     [JsonPropertyName("curl-command")]
     public string? CurlCommand { get; init; }
 
+    [JsonPropertyName("matcher-name")]
+    [JsonConverter(typeof(OptionalMatcherNameConverter))]
+    public string? MatcherName { get; init; }
+
     [JsonPropertyName("matcher-status")]
     public bool? MatcherStatus { get; init; }
 }

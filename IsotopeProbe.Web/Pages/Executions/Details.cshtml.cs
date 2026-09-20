@@ -4,10 +4,11 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 
 namespace IsotopeProbe.Web.Pages.Executions;
 
-public sealed class DetailsModel(OwnedScanQueryService queries) : PageModel
+public sealed class DetailsModel(OwnedScanQueryService queries, IsotopeProbe.Comparisons.OwnedScanComparisonService comparisons) : PageModel
 {
     public ScanDetails Scan { get; private set; } = null!;
     public Page<FindingSummary> Findings { get; private set; } = null!;
+    public int? PreviousSuccessfulId { get; private set; }
     public string? Severity { get; private set; }
     public async Task<IActionResult> OnGetAsync(int id, int skip = 0, string? severity = null)
     {
@@ -16,6 +17,7 @@ public sealed class DetailsModel(OwnedScanQueryService queries) : PageModel
         var scan = await queries.GetScanAsync(id, HttpContext.RequestAborted);
         if (scan is null) return NotFound();
         Scan = scan;
+        PreviousSuccessfulId = await comparisons.PreviousSuccessfulAsync(id, HttpContext.RequestAborted);
         Severity = string.IsNullOrEmpty(severity) ? null : severity;
         var findings = await queries.ListFindingsAsync(id, skip, cancellationToken: HttpContext.RequestAborted, severity: Severity);
         if (findings is null) return NotFound();

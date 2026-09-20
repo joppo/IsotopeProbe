@@ -1,0 +1,19 @@
+@page "/scans/new"
+@model IsotopeProbe.Web.Pages.Executions.NewModel
+@{ ViewData["Title"] = "New scan"; }
+<h1>New scan</h1>
+<p>Template profile: <strong>@Model.Profile</strong></p>
+<p>Choose an operator-configured target. Results appear in your execution list; refresh manually for updates.</p>
+<div asp-validation-summary="All" role="alert"></div>
+@if (Model.Targets.Count == 0) { <p>No targets are configured. Contact the local operator.</p> }
+else {
+<form method="post">
+    <input asp-for="SubmissionToken" type="hidden" />
+    <label asp-for="TargetId">Target</label>
+    <select asp-for="TargetId" required>
+        <option value="">Choose a target</option>
+        @foreach (var target in Model.Targets) { <option value="@target.Id">@target.Name</option> }
+    </select>
+    <button type="submit">Queue scan</button>
+</form>
+}

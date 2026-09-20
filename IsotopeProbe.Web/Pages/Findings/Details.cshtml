@@ -17,6 +17,7 @@
 <dt>Port</dt><dd>@f.Port</dd><dt>Scheme</dt><dd>@f.Scheme</dd><dt>URL</dt><dd>@f.Url</dd>
 <dt>IP address</dt><dd>@f.IpAddress</dd>
 <dt>Scanner timestamp (original timezone/offset as stored; may be unspecified)</dt><dd>@f.Timestamp</dd>
+@if (f.MatcherName is not null) { <dt>Matcher name</dt><dd>@f.MatcherName</dd> }
 <dt>Matcher status</dt><dd>@(f.MatcherStatus?.ToString() ?? "Unavailable")</dd>
 </dl>
 <h2>Evidence</h2>

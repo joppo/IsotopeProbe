@@ -20,7 +20,7 @@ services:
     build:
       context: ./test-target
     container_name: isotope-nuclei-target
-
+    restart: unless-stopped
     ports:
       - "8085:80"
 

@@ -13,29 +13,39 @@ Build the smallest possible vertical slice:
 5. JSONL findings are deserialized into C# objects.
 6. Executions and findings are saved to PostgreSQL using EF Core and Npgsql.
 7. Results are printed to the console.
-8. Saved results can be browsed locally through read-only Razor Pages.
+8. Signed-in users can queue scans of configured targets and browse owned results through Razor Pages.
 
 ## Architecture
 
 The application is split into IsotopeProbe.Cli (executable startup, arguments,
 configuration, wiring, and console presentation) and IsotopeProbe.Core (scan
 orchestration, Nuclei execution/parsing, domain entities, and EF persistence), plus
-IsotopeProbe.Web (local read-only Razor Pages).
+IsotopeProbe.Web (local Razor Pages and a single background scan worker).
 CLI and Web reference Core; Core must not reference either host, and Web must not
-reference CLI. Web calls Core query services, never launches scans, and never
-applies migrations on startup. Web requires Google sign-in and uses only
-OwnedScanQueryService with the internal user ID from the validated session;
-TrustedScanQueryService and ownership/group mutation commands are CLI-only.
-Groups grant no additional scan access. Unowned scans are invisible to Web.
+reference CLI. Web pages submit owned work through Core to the PostgreSQL queue;
+a scoped Core dispatcher runs it from a BackgroundService, never the HTTP request.
+Web never applies migrations on startup. Web requires Google sign-in and uses only
+OwnedScanQueryService, OwnedTargetQueryService, and OwnedScanComparisonService
+with the internal user ID from the validated session;
+TrustedScanQueryService, WebScanRecovery, and ownership/group mutation commands are CLI-only.
+Groups grant no additional scan or target access. Unowned scans are invisible to Web.
+Persistent targets are owned identity/history records, unique by owner and exact URL;
+they never grant Web scanning permission. Executions retain captured URLs and scanner
+inputs; nullable TargetId links must have the same owner, enforced in PostgreSQL.
+Owned CLI scans, Web admission, and atomic assignment resolve targets through Core.
+Do not add target transfer, URL editing, or deletion flows.
 Web provisions local users on Google sign-in and supports POST logout; scan browsing
-remains read-only.
+remains read-only. Web submissions accept only server-configured target IDs and a
+user-scoped protected idempotency token; never accept owner IDs or scanner arguments.
+Keep queue admission and claiming in Core, hosting in Web. Web concurrency limits
+apply to one worker instance, not direct CLI scans.
 Keep existing migrations and database schema unchanged during structural refactors.
 Use EF Core migrations; do not use EnsureCreated. Keep connection credentials in environment variables.
 
 Do NOT introduce:
 - Docker
 - web APIs
-- message queues
+- external message brokers
 - scheduling
 - microservices
 

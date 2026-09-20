@@ -27,6 +27,7 @@ public sealed class NucleiFindingParser
             Url = dto.Url,
             IpAddress = dto.Ip,
             Timestamp = dto.Timestamp,
+            MatcherName = dto.MatcherName,
             MatcherStatus = dto.MatcherStatus,
             Request = dto.Request,
             Response = dto.Response,

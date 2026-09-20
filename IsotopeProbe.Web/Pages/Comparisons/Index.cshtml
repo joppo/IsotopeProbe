@@ -1,0 +1,71 @@
+@page "/executions/{newerId:int}/compare"
+@using IsotopeProbe.Comparisons
+@model IsotopeProbe.Web.Pages.Comparisons.IndexModel
+@{ ViewData["Title"] = "Compare detected findings"; }
+<h1>Compare detected findings</h1>
+<p><a asp-page="/Executions/Details" asp-route-id="@Model.NewerId">Newer execution @Model.NewerId</a></p>
+@if (Model.Error is not null) { <p role="alert">@Model.Error</p> }
+@if (Model.Baselines is not null) {
+<h2>Choose a successful baseline</h2>
+@if (Model.Baselines.TotalCount == 0) { <p>No other completed successful execution is available for this target.</p> }
+else {
+<p>Selection is paginated. Category direction follows the selected baseline → newer execution.</p>
+<ul>@foreach (var baseline in Model.Baselines.Items) {
+<li><a asp-route-newerId="@Model.NewerId" asp-route-olderId="@baseline.Id">Baseline @baseline.Id · @Display.Utc(baseline.StartedAt) · @baseline.Url</a></li>
+}</ul>
+<nav aria-label="Baseline selection pagination">
+@if (Model.Baselines.Skip > 0) { <a asp-route-newerId="@Model.NewerId" asp-route-olderId="@Model.OlderId" asp-route-baselineSkip="@Math.Max(0, Model.Baselines.Skip - 20)">Previous baselines</a> }
+@if ((long)Model.Baselines.Skip + 20 < Model.Baselines.TotalCount) { <a asp-route-newerId="@Model.NewerId" asp-route-olderId="@Model.OlderId" asp-route-baselineSkip="@(Model.Baselines.Skip + 20)">Next baselines</a> }
+</nav>
+}
+}
+@if (Model.Comparison is null && Model.Error is null) { <p>No previous successful scan could be selected. Choose an available baseline above.</p> }
+@if (Model.Comparison is { } comparison) {
+<p><a asp-page="/Targets/Details" asp-route-id="@comparison.Newer.TargetId">Target @comparison.Newer.TargetId history</a></p>
+<h2>Recorded scan coverage</h2>
+<div class="table-scroll"><table>
+<thead><tr><th>Recorded input</th><th>Older / baseline <a asp-page="/Executions/Details" asp-route-id="@comparison.Older.Id">@comparison.Older.Id</a></th><th>Newer <a asp-page="/Executions/Details" asp-route-id="@comparison.Newer.Id">@comparison.Newer.Id</a></th></tr></thead>
+<tbody>
+<tr><th>Started (UTC)</th><td>@Display.Utc(comparison.Older.StartedAt)</td><td>@Display.Utc(comparison.Newer.StartedAt)</td></tr>
+<tr><th>Captured target URL</th><td>@comparison.Older.Url</td><td>@comparison.Newer.Url</td></tr>
+<tr><th>Template selection</th><td>@(comparison.Older.TemplatePath ?? "Not recorded / scanner default")</td><td>@(comparison.Newer.TemplatePath ?? "Not recorded / scanner default")</td></tr>
+<tr><th>Template profile</th><td>@(comparison.Older.TemplateProfile ?? "Not recorded")</td><td>@(comparison.Newer.TemplateProfile ?? "Not recorded")</td></tr>
+<tr><th>Timeout (seconds)</th><td>@(comparison.Older.TimeoutSeconds?.ToString() ?? "Not recorded")</td><td>@(comparison.Newer.TimeoutSeconds?.ToString() ?? "Not recorded")</td></tr>
+<tr><th>Nuclei version</th><td>Not recorded</td><td>Not recorded</td></tr>
+<tr><th>Template version/hash</th><td>Not recorded</td><td>Not recorded</td></tr>
+<tr><th>Scan-mode / authentication-context identifier</th><td>Not recorded</td><td>Not recorded</td></tr>
+</tbody></table></div>
+@foreach (var warning in comparison.Warnings) { <p role="note">@warning</p> }
+<h2>Comparison counts</h2>
+<p>Baseline: @comparison.Counts.OlderRecords raw finding record(s). Newer: @comparison.Counts.NewerRecords raw finding record(s).</p>
+<p>Unique comparison items: @comparison.Counts.New newly detected; @comparison.Counts.Both detected in both; @comparison.Counts.NoLonger no longer detected.</p>
+<p>Excluded incomplete records: @comparison.Counts.IncompleteOlder baseline; @comparison.Counts.IncompleteNewer newer. These are outside the three categories.</p>
+<nav aria-label="Comparison categories">
+@foreach (var category in Enum.GetValues<ComparisonCategory>()) {
+<a asp-route-newerId="@Model.NewerId" asp-route-olderId="@Model.OlderId" asp-route-category="@category">@IndexModel.Label(category)</a><text> · </text>
+}
+</nav>
+<h2>@IndexModel.Label(comparison.Category)</h2>
+@if (comparison.Items.Items.Count == 0) { <p>No items on this page.</p> }
+else {
+<div class="table-scroll"><table><thead><tr><th>Template ID</th><th>Matched location</th><th>Matcher name</th><th>Baseline severity / occurrences / evidence</th><th>Newer severity / occurrences / evidence</th></tr></thead>
+<tbody>@foreach (var item in comparison.Items.Items) {
+var sample = item.Older.FirstOrDefault() ?? item.Newer[0];
+<tr><td>@sample.TemplateId</td><td>@sample.MatchedAt</td><td>@(string.IsNullOrWhiteSpace(sample.MatcherName) ? "No name recorded" : sample.MatcherName)</td>
+<td>@IndexModel.Severities(item.Older) · @item.Older.Count record(s)
+@if (item.Older.Count > 0) {
+<a asp-page="/Findings/Details" asp-route-id="@item.Older[0].Id">Finding @item.Older[0].Id</a>
+<a asp-page="/Comparisons/Evidence" asp-route-olderId="@Model.OlderId" asp-route-newerId="@Model.NewerId" asp-route-baseline="true" asp-route-representativeId="@item.Older[0].Id">All baseline records</a>
+}</td>
+<td>@IndexModel.Severities(item.Newer) · @item.Newer.Count record(s)
+@if (item.Newer.Count > 0) {
+<a asp-page="/Findings/Details" asp-route-id="@item.Newer[0].Id">Finding @item.Newer[0].Id</a>
+<a asp-page="/Comparisons/Evidence" asp-route-olderId="@Model.OlderId" asp-route-newerId="@Model.NewerId" asp-route-baseline="false" asp-route-representativeId="@item.Newer[0].Id">All newer records</a>
+}</td></tr>
+}</tbody></table></div>
+}
+<nav aria-label="Comparison results pagination">
+@if (comparison.Items.Skip > 0) { <a asp-route-newerId="@Model.NewerId" asp-route-olderId="@Model.OlderId" asp-route-category="@comparison.Category" asp-route-skip="@Math.Max(0, comparison.Items.Skip - 20)">Previous results</a> }
+@if ((long)comparison.Items.Skip + 20 < comparison.Items.TotalCount) { <a asp-route-newerId="@Model.NewerId" asp-route-olderId="@Model.OlderId" asp-route-category="@comparison.Category" asp-route-skip="@(comparison.Items.Skip + 20)">Next results</a> }
+</nav>
+}

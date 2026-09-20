@@ -150,7 +150,7 @@ public sealed class AuthenticationTests : IAsyncLifetime
     {
         await using var factory = new AuthWebFactory(connectionString);
         using var client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost:7080"), AllowAutoRedirect = false });
-        foreach (var path in new[] { "/", "/executions/1", "/findings/1", "/Account" })
+        foreach (var path in new[] { "/", "/executions/1", "/findings/1", "/Account", "/targets", "/targets/1" })
         {
             var anonymous = await client.GetAsync(path);
             Assert.Equal(HttpStatusCode.Redirect, anonymous.StatusCode);
@@ -204,6 +204,111 @@ public sealed class AuthenticationTests : IAsyncLifetime
     }
 
     [PostgresFact]
+    public async Task WebSubmission_RequiresSessionAndCsrf_UsesAuthenticatedOwner_AndRedirectsToOriginalQueueRecord()
+    {
+        await using var factory = new AuthWebFactory(connectionString);
+        using var client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost:7080"), AllowAutoRedirect = false });
+        Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/scans/new")).StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, (await client.PostAsync("/scans/new", new FormUrlEncodedContent([]))).StatusCode);
+        await SignIn(client, "/scans/new");
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsync("/scans/new", new FormUrlEncodedContent([]))).StatusCode);
+        await using var db = Context();
+        var owner = await db.Users.SingleAsync();
+        var other = await new UserService(db).ResolveGoogleAsync("other", null, null);
+        var html = await client.GetStringAsync("/scans/new");
+        var nonce = WebUtility.HtmlDecode(Regex.Match(html, "name=\"SubmissionToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value);
+        Assert.NotEmpty(nonce);
+        var csrf = WebUtility.HtmlDecode(Regex.Match(html, "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value);
+        FormUrlEncodedContent Submission(string target, string token) => new(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = csrf, ["SubmissionToken"] = token, ["TargetId"] = target,
+            ["OwnerUserId"] = other.Id.ToString(), ["Target"] = "http://untrusted.invalid",
+            ["TemplatePath"] = "/untrusted"
+        });
+        var invalid = await client.PostAsync("/scans/new", Submission("http://localhost:8085", nonce));
+        Assert.Contains("Choose an allowed target", await invalid.Content.ReadAsStringAsync());
+        Assert.Empty(await db.ScanExecutions.ToListAsync());
+        var tampered = await client.PostAsync("/scans/new", Submission("local", nonce + "tampered"));
+        Assert.Contains("Invalid submission token", await tampered.Content.ReadAsStringAsync());
+        var submitted = await client.PostAsync("/scans/new", Submission("local", nonce));
+        Assert.Equal(HttpStatusCode.Redirect, submitted.StatusCode);
+        var repeat = await client.PostAsync("/scans/new", Submission("local", nonce));
+        Assert.Equal(submitted.Headers.Location, repeat.Headers.Location);
+        var saved = await db.ScanExecutions.SingleAsync();
+        Assert.NotNull(saved.TargetId);
+        Assert.Equal(owner.Id, (await db.Targets.SingleAsync(x => x.Id == saved.TargetId)).OwnerUserId);
+        Assert.Contains($"/targets/{saved.TargetId}", await client.GetStringAsync(submitted.Headers.Location));
+        Assert.Contains("http://localhost:8085", await client.GetStringAsync("/targets"));
+        Assert.Contains("Execution history", await client.GetStringAsync($"/targets/{saved.TargetId}"));
+        Assert.Equal(owner.Id, saved.OwnerUserId);
+        Assert.Equal(ScanStatus.Queued, saved.Status);
+        Assert.Null(saved.StartedAt);
+        Assert.Equal("http://localhost:8085", saved.Target);
+        Assert.DoesNotContain("untrusted", saved.TemplatePath!);
+        Assert.Empty(await db.Findings.ToListAsync());
+        Assert.Contains("Queued", await client.GetStringAsync(submitted.Headers.Location));
+        var otherId = await new IsotopeProbe.Queue.OwnedScanSubmissionService(db, new(other.Id),
+            new() { Targets = [new() { Id = "local", Name = "Local", Url = "http://localhost:8085" }] })
+            .SubmitAsync("local", Guid.NewGuid());
+        var finding = new Finding { ScanExecutionId = otherId, Name = "private", TemplateId = "test", Severity = "high", MatchedAt = "http://localhost:8085", RawJson = "{}" };
+        db.Add(finding);
+        await db.SaveChangesAsync();
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/executions/{otherId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/findings/{finding.Id}")).StatusCode);
+        var owned = new OwnedScanQueryService(db, new(owner.Id));
+        Assert.Equal(1, (await owned.ListScansAsync()).TotalCount);
+        Assert.Null(await owned.ListFindingsAsync(otherId));
+        var otherTargetId = (await db.ScanExecutions.SingleAsync(x => x.Id == otherId)).TargetId;
+        Assert.NotEqual(saved.TargetId, otherTargetId);
+        foreach (var path in new[] { $"/targets/{otherTargetId}", "/targets/999999" })
+            Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(path)).StatusCode);
+        Assert.DoesNotContain($"/targets/{otherTargetId}\"", await client.GetStringAsync("/targets"));
+        var historicalTarget = await new IsotopeProbe.Targets.TargetResolver(db).ResolveAsync(owner.Id, "http://localhost:8085/history-only");
+        Assert.Contains("history only", await client.GetStringAsync($"/targets/{historicalTarget}"));
+        var fresh = await client.GetStringAsync("/scans/new");
+        var freshNonce = WebUtility.HtmlDecode(Regex.Match(fresh, "name=\"SubmissionToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value);
+        var denied = await client.PostAsync("/scans/new", Submission(otherTargetId.ToString()!, freshNonce));
+        Assert.Contains("Choose an allowed target", await denied.Content.ReadAsStringAsync());
+    }
+
+    [LifecycleFact]
+    public async Task WebSubmissionThroughWorker_PersistsFindingOnRedirectedExecution()
+    {
+        var executable = Path.Combine(Path.GetTempPath(), "isotope-http-scanner-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await File.WriteAllTextAsync(executable, "#!/usr/bin/python3\nprint('{\"template-id\":\"http-test\",\"info\":{\"name\":\"HTTP test\",\"severity\":\"info\"},\"matched-at\":\"http://localhost:8085\"}',flush=True)\n");
+            if (OperatingSystem.IsLinux()) File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            await using var factory = new AuthWebFactory(connectionString, executable: executable);
+            using var client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost:7080"), AllowAutoRedirect = false });
+            await SignIn(client, "/scans/new");
+            var html = await client.GetStringAsync("/scans/new");
+            string Field(string name) => WebUtility.HtmlDecode(Regex.Match(html, $"name=\"{name}\"[^>]*value=\"([^\"]+)\"").Groups[1].Value);
+            var response = await client.PostAsync("/scans/new", new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["TargetId"] = "local", ["SubmissionToken"] = Field("SubmissionToken"),
+                ["__RequestVerificationToken"] = Field("__RequestVerificationToken")
+            }));
+            Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            ScanExecution saved;
+            while (true)
+            {
+                await using var db = Context();
+                saved = await db.ScanExecutions.Include(x => x.Findings).SingleAsync(deadline.Token);
+                if (saved.Status == ScanStatus.Succeeded) break;
+                Assert.DoesNotContain(saved.Status, new[] { ScanStatus.Failed, ScanStatus.Cancelled });
+                await Task.Delay(25, deadline.Token);
+            }
+            Assert.EndsWith($"/executions/{saved.Id}", response.Headers.Location!.ToString());
+            var finding = Assert.Single(saved.Findings);
+            Assert.Equal(saved.Id, finding.ScanExecutionId);
+            Assert.Contains("http-test", await client.GetStringAsync($"/findings/{finding.Id}"));
+        }
+        finally { File.Delete(executable); }
+    }
+
+    [PostgresFact]
     public async Task FailedProvisioning_NeverIssuesApplicationSession()
     {
         await using var factory = new AuthWebFactory(connectionString, failProvisioning: true);
@@ -250,6 +355,48 @@ public sealed class AuthenticationTests : IAsyncLifetime
         return new(fields);
     }
 
+    [PostgresFact]
+    public async Task ComparisonPagesAuthorizeBothExecutionsAndEncodeStoredNames()
+    {
+        await using var factory = new AuthWebFactory(connectionString);
+        using var client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost:7080"), AllowAutoRedirect = false });
+        Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/executions/1/compare?olderId=2")).StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, (await client.GetAsync("/comparison-records?olderId=1&newerId=2")).StatusCode);
+        await SignIn(client, "/");
+        await using var db = Context();
+        var owner = (await db.Users.SingleAsync()).Id;
+        var other = (await new UserService(db).ResolveGoogleAsync("comparison-other", null, null)).Id;
+        var target = await new IsotopeProbe.Targets.TargetResolver(db).ResolveAsync(owner, "http://localhost:8085");
+        var privateTarget = await new IsotopeProbe.Targets.TargetResolver(db).ResolveAsync(other, "http://localhost:8085");
+        var older = Scan(owner, "http://localhost:8085", "high", "high");
+        var newer = Scan(owner, "http://localhost:8085", "low");
+        var hidden = Scan(other, "http://localhost:8085", "critical");
+        foreach (var scan in new[] { older, newer, hidden })
+        {
+            scan.Status = ScanStatus.Succeeded; scan.CompletedAt = DateTimeOffset.UtcNow;
+            scan.TargetId = scan.OwnerUserId == owner ? target : privateTarget;
+            foreach (var finding in scan.Findings) finding.MatcherName = "<script>matcher</script>";
+        }
+        older.StartedAt = newer.StartedAt!.Value.AddHours(-1);
+        db.AddRange(older, newer, hidden); await db.SaveChangesAsync();
+        var html = await client.GetStringAsync($"/executions/{newer.Id}/compare?olderId={older.Id}&category=Both");
+        Assert.Contains("Detected in both", html); Assert.Contains("&lt;script&gt;matcher&lt;/script&gt;", html);
+        Assert.DoesNotContain("<script>", html); Assert.Contains("high", html); Assert.Contains("low", html);
+        Assert.Contains("Coverage cannot be established", html);
+        var details = await client.GetStringAsync($"/executions/{newer.Id}");
+        Assert.Contains("Compare with previous successful scan", details);
+        Assert.Contains("Matcher name", await client.GetStringAsync($"/findings/{newer.Findings[0].Id}"));
+        Assert.Contains("2 occurrence(s)", await client.GetStringAsync($"/comparison-records?olderId={older.Id}&newerId={newer.Id}&baseline=true&representativeId={older.Findings[0].Id}"));
+        foreach (var path in new[] {
+            $"/executions/{newer.Id}/compare?olderId={hidden.Id}",
+            $"/executions/{hidden.Id}/compare?olderId={older.Id}",
+            $"/executions/{newer.Id}/compare?olderId=999999",
+            $"/comparison-records?olderId={hidden.Id}&newerId={newer.Id}&baseline=true&representativeId={hidden.Findings[0].Id}",
+            $"/comparison-records?olderId={older.Id}&newerId={newer.Id}&baseline=true&representativeId={hidden.Findings[0].Id}" })
+            Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync(path)).StatusCode);
+        Assert.Contains("Choose two different executions", await client.GetStringAsync($"/executions/{newer.Id}/compare?olderId={newer.Id}"));
+    }
+
     private static ScanExecution Scan(Guid? owner, string target, params string[] severities) => new()
     {
         OwnerUserId = owner, Target = target, StartedAt = DateTimeOffset.UtcNow,
@@ -269,7 +416,7 @@ public sealed class AuthenticationTests : IAsyncLifetime
         }
     }
 
-    private sealed class AuthWebFactory(string connection, bool failProvisioning = false) : WebApplicationFactory<Program>
+    private sealed class AuthWebFactory(string connection, bool failProvisioning = false, string? executable = null) : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -278,10 +425,17 @@ public sealed class AuthenticationTests : IAsyncLifetime
             {
                 ["ISOTOPEPROBE_CONNECTION_STRING"] = connection,
                 ["Authentication:Google:ClientId"] = "test-client",
-                ["Authentication:Google:ClientSecret"] = "test-secret"
+                ["Authentication:Google:ClientSecret"] = "test-secret",
+                ["WebScans:Targets:0:Id"] = "local",
+                ["WebScans:Targets:0:Name"] = "Local",
+                ["WebScans:Targets:0:Url"] = "http://localhost:8085"
             }));
             builder.ConfigureTestServices(services =>
             {
+                var worker = services.Single(x => x.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) &&
+                    x.ImplementationType == typeof(IsotopeProbe.Web.Scanning.ScanWorker));
+                if (executable is null) services.Remove(worker); // Isolate HTTP admission tests.
+                else services.AddScoped(_ => new IsotopeProbe.Nuclei.NucleiRunner(new(), executable));
                 services.PostConfigure<GoogleOptions>(GoogleDefaults.AuthenticationScheme,
                     options => options.Backchannel = new HttpClient(new MockGoogle()));
                 if (failProvisioning)

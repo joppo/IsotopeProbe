@@ -1,0 +1,3 @@
+{"template-id":"unchanged","info":{"name":"Unchanged local condition","severity":"high"},"matched-at":"http://localhost:8085/unchanged","matcher-name":"body","matcher-status":true,"response":"baseline evidence 1"}
+{"template-id":"unchanged","info":{"name":"Unchanged local condition","severity":"high"},"matched-at":"http://localhost:8085/unchanged","matcher-name":"body","matcher-status":true,"response":"baseline evidence 2"}
+{"template-id":"removed","info":{"name":"Previously detected local condition","severity":"info"},"matched-at":"http://localhost:8085/removed","matcher-status":true}
